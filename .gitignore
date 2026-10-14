@@ -1,0 +1,6 @@
+.venv/
+out/
+.vibe-wise/
+__pycache__/
+*.pyc
+.DS_Store
