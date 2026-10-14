@@ -136,3 +136,127 @@ SEARCH_REGIONS = {
     "inventory": (0.25, 0.0, 0.75, 0.75),
     "f3": (0.0, 0.80, 0.40, 1.0),
 }
+
+# --- Glyph reader (Minecraft font OCR, vodreview/glyphs.py) ------------------
+# Text pixels = light (darkest channel >= GLYPH_MIN_LIGHT) and unsaturated
+# (max - min channel <= GLYPH_MAX_CHROMA): white/grey text, not gold names.
+GLYPH_MIN_LIGHT = 170
+GLYPH_MAX_CHROMA = 40
+GLYPH_SHADOW_MAX = 110           # a drop-shadow pixel is darker than this (gray, 0-255)
+GLYPH_MIN_FONT_PX = 2.5          # font pixels smaller than this (in screen px) are too blurry to read
+GLYPH_MIN_SCORE = 0.88           # share of equal cells needed to accept a glyph match
+
+# --- Final time on the result screen (vodreview/finaltime.py) ----------------
+# The "Match Winner: <name> (MM:SS.mmm)" line is read on frames where the
+# ResultDetector finds the "Match Winner:" label.
+FINAL_TIME_READ_SECONDS = 3.0    # read result-screen frames for up to this long
+FINAL_TIME_FRAME_STEP = 2        # read every Nth video frame in that window
+FINAL_TIME_MAX_READS = 15        # stop after this many valid reads
+FINAL_TIME_SLACK_S = 60.0        # the time shown can't exceed the video duration + this
+
+# --- Advancement toasts (vodreview/toasts.py) --------------------------------
+# A 1.16 advancement toast is a flat dark-grey box (RGB ~31,31,31, measured at
+# 05:25 / 05:55 / 18:52 / 19:49 on the test VOD) in the top-right corner of the
+# game window. Searched in this normalized region, which covers the full-screen
+# toast slots 0-2 (y 0-431 px at 1080p) and the top-right corner of every
+# resized strip (thin/tall toast at y ~26-60, wide at y ~405-430).
+TOAST_SEARCH_REGION = (0.42, 0.00, 1.00, 0.47)
+TOAST_FILL_RANGE = (24, 40)      # each BGR channel of a fill pixel is in this range (0-255)
+TOAST_FRAME_RANGE = (66, 100)    # the light-grey frame line around the fill (RGB ~83)
+TOAST_FILL_MAX_CHROMA = 8        # ... and max - min channel <= this (neutral grey, not End-sky purple)
+# The frame line takes on some colour from the background in small (resized)
+# toasts - video chroma subsampling bleeds it in (measured up to 14).
+TOAST_FRAME_MAX_CHROMA = 16
+TOAST_MIN_FILL_PIXELS = 300      # fewer fill pixels in the region = no toast (cheap per-sample gate)
+TOAST_MIN_HEIGHT_PX = 12         # fill box at least this tall (thin-strip toast: 21 px)
+# The fill rows above "Advancement Made!" and the frame line below the box
+# must be this clean (share of matching pixels) - rules out dark world areas.
+TOAST_BAND_MIN_FILL = 0.85
+# Fill box at most this many GUI px narrower than 154 = fully slid in (frames
+# 2-4 GUI px into the slide scored only ~0.7 against the title templates).
+TOAST_FULL_SLACK_GUI_PX = 1.5
+# Title recognition (normalised cross-correlation of the title crop against
+# calibration/toasts/). Measured on the test VOD: right title 0.88-1.00 at full
+# screen (best wrong title <= 0.67; MCSR's own "If the opponent agrees..." box
+# <= 0.41); 0.68-0.77 in the thin strip (1 GUI px = 0.73 screen px, blurred
+# text), where misaligned crops gave wrong titles at <= 0.52 with < 0.05 margin.
+# Horizontal scale factors tried when reading (the thin strip measured ~3% wider than tall).
+TOAST_X_STRETCHES = (0.98, 1.0, 1.02, 1.04)
+TOAST_MIN_READ_K = 0.6           # don't try to read toasts smaller than this (screen px per GUI px)
+TOAST_MIN_SCORE = 0.80           # full-size toast (k >= 1.5)
+TOAST_MIN_SCORE_SMALL = 0.65     # toast inside a resized strip
+TOAST_MIN_MARGIN = 0.15          # best title must beat the runner-up by this much
+# A toast stays ~5 s (+0.6 s slide in, 0.6 s slide out). When a title is read,
+# walk back over earlier samples with a toast in the same slot to find when it
+# appeared; tolerate short gaps (layout switch, a missed frame) of up to:
+TOAST_GAP_S = 0.5
+TOAST_MAX_SLOT = 4               # boxes lower than this slot are not toasts (stone-brick false positives)
+TOAST_MAX_SHOW_S = 6.5           # never walk back further than this from the first read
+
+# Split advancements: split name -> advancement id. Their title templates are
+# calibration/toasts/<split>.png; other advancements are in
+# calibration/toasts/other/<advancement id>.png (recorded, not used for splits).
+SPLIT_ADVANCEMENTS = {
+    "entered_nether": "we_need_to_go_deeper",
+    "found_bastion": "those_were_the_days",
+    "found_fortress": "a_terrible_fortress",
+    "found_stronghold": "eye_spy",
+    "entered_end": "the_end",
+}
+# Display titles (advancement id -> in-game title) for the templates we have.
+ADVANCEMENT_TITLES = {
+    "we_need_to_go_deeper": "We Need to Go Deeper",
+    "those_were_the_days": "Those Were the Days",
+    "a_terrible_fortress": "A Terrible Fortress",
+    "eye_spy": "Eye Spy",
+    "the_end": "The End?",
+    "stone_age": "Stone Age",
+    "acquire_hardware": "Acquire Hardware",
+    "isnt_it_iron_pick": "Isn't It Iron Pick",
+    "hot_stuff": "Hot Stuff",
+    "ice_bucket_challenge": "Ice Bucket Challenge",
+    "who_is_cutting_onions": "Who is Cutting Onions?",
+    "war_pigs": "War Pigs",
+    "monster_hunter": "Monster Hunter",
+    "into_fire": "Into Fire",
+}
+
+# --- Reset dialog -------------------------------------------------------------
+# MCSR asks "Are you sure you want to reset this world?" before a seed reset
+# (02:20-02:21 on the test VOD). Template: calibration/reset/; searched here.
+RESET_SEARCH_REGION = (0.15, 0.20, 0.85, 0.45)
+
+# --- Dimension (vodreview/dimension.py) ------------------------------------------
+DIMENSION_SMOOTH_S = 6.0         # sliding majority window over the labelled samples (seconds)
+DIMENSION_MIN_STAY_S = 8.0       # stretches shorter than this are noise (dark cave, lava pool)
+# F3 dimension line ("minecraft:overworld" / "minecraft:the_nether", 9th line of
+# the left column; 1080p: x 230-480, y 332-372, measured at 05:25 and 18:48).
+# Templates: calibration/dimension/<dimension>.png (just the word).
+DIM_F3_REGION = (180 / 1920, 315 / 1080, 560 / 1920, 390 / 1080)
+DIM_F3_SCALE = 1 / 2             # match at half resolution
+DIM_F3_MIN_SCORE = 0.75
+DIM_F3_MIN_MARGIN = 0.10
+# Extra areas left out of the colour statistics: the hotbar/hearts strip and
+# the held items (main hand bottom right, off-hand bottom left - this runner
+# keeps red cooked meat there), which look the same in every dimension.
+DIM_EXTRA_MASK = {
+    "hotbar": (0.25, 0.80, 0.75, 1.00),
+    "held_item": (0.55, 0.55, 1.00, 1.00),
+    "offhand_item": (0.00, 0.55, 0.30, 1.00),
+}
+# Colour rules (shares of unmasked pixels, see dimension.py). Tuned on the test
+# VOD's world/f3 samples against the known dimension timeline: per-sample
+# labels came out overworld 1382 right / 36 wrong (rest unknown), nether
+# 3778 / 4, End 518 / 5. Medians: End end_sky 0.47, end_stone 0.33;
+# nether red 0.20; overworld red 0.00.
+DIM_END_SKY_MIN = 0.15
+DIM_END_STONE_MIN = 0.02
+DIM_END_MAX_RED = 0.02
+DIM_NETHER_RED_MIN = 0.10
+DIM_NETHER_TEAL_MIN = 0.10
+DIM_NETHER_MAX_BLUE = 0.02
+DIM_NETHER_MAX_GREEN = 0.05
+DIM_OVERWORLD_BLUE_MIN = 0.03
+DIM_OVERWORLD_GREEN_MIN = 0.05
+DIM_OVERWORLD_MAX_RED = 0.05
+DIM_OVERWORLD_MAX_TEAL = 0.03

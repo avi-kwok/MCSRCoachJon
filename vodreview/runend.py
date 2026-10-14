@@ -11,6 +11,9 @@ Two detectors, both looking at fixed spots on the screen:
   red = loss. HSV splits colour into Hue (which colour), Saturation (how
   colourful) and Value (how bright), so "is this gold or red?" becomes a
   simple range check on hue.
+
+The final time on the same screen is read by vodreview/finaltime.py, which
+reuses ResultDetector.locate() to find the line.
 """
 
 import cv2
@@ -92,15 +95,28 @@ class ResultDetector:
                 self.templates.append(
                     cv2.resize(image, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA))
 
+    def locate(self, gray_frame):
+        """Find the "Match Winner:" label -> (score, (x0, y0, x1, y1) in full-frame pixels) or None."""
+        small = cv2.resize(gray_frame, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
+        sh, sw = small.shape[:2]
+        rx0, ry0 = int(config.RESULT_LABEL_REGION[0] * sw), int(config.RESULT_LABEL_REGION[1] * sh)
+        search = region(small, config.RESULT_LABEL_REGION)
+        best = None
+        for template in self.templates:
+            th, tw = template.shape[:2]
+            if th <= search.shape[0] and tw <= search.shape[1]:
+                _, score, _, (x, y) = cv2.minMaxLoc(cv2.matchTemplate(search, template, cv2.TM_CCOEFF_NORMED))
+                if best is None or score > best[0]:
+                    box = ((rx0 + x) / self.scale, (ry0 + y) / self.scale,
+                           (rx0 + x + tw) / self.scale, (ry0 + y + th) / self.scale)
+                    best = (float(score), tuple(int(round(v)) for v in box))
+        if best is None or best[0] < config.MATCH_THRESHOLD:
+            return None
+        return best
+
     def check(self, frame, gray_frame):
         """Return "win", "loss" or None (no result screen) for one BGR frame."""
-        small = cv2.resize(gray_frame, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
-        search = region(small, config.RESULT_LABEL_REGION)
-        best = 0.0
-        for template in self.templates:
-            if template.shape[0] <= search.shape[0] and template.shape[1] <= search.shape[1]:
-                best = max(best, float(cv2.matchTemplate(search, template, cv2.TM_CCOEFF_NORMED).max()))
-        if best < config.MATCH_THRESHOLD:
+        if self.locate(gray_frame) is None:
             return None
         # Count strongly coloured, bright pixels in the title area by hue.
         title = cv2.resize(region(frame, config.RESULT_TITLE_REGION), None, fx=self.scale, fy=self.scale,

@@ -11,6 +11,8 @@ class Sample:
     motion: float    # % of unmasked pixels that changed
     screen: str      # world / resized / inventory / pause / settings / f3
     still: bool = False
+    dimension: str = ""   # overworld / nether / end / "" (unknown), see dimension.py
+    reset: bool = False   # MCSR "reset this world?" dialog visible
 
 
 @dataclass

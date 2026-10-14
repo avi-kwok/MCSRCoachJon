@@ -138,3 +138,28 @@ class ScreenClassifier:
             if scores[screen] >= config.MATCH_THRESHOLD:
                 return screen
         return "world"   # nothing matched: assume normal gameplay view
+
+
+class ResetDialogDetector:
+    """MCSR's "Are you sure you want to reset this world?" confirmation (template match)."""
+
+    def __init__(self, frame_height):
+        self.scale = config.MATCH_SCALE * frame_height / config.TEMPLATE_SOURCE_HEIGHT
+        self.templates = []
+        folder = config.CALIBRATION_DIR / "reset"
+        for path in sorted(folder.glob("*.png")) if folder.is_dir() else []:
+            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+            if image is not None:
+                self.templates.append(cv2.resize(image, None, fx=self.scale, fy=self.scale,
+                                                 interpolation=cv2.INTER_AREA))
+
+    def check(self, gray_frame):
+        if not self.templates:
+            return False
+        crop = cv2.resize(region(gray_frame, config.RESET_SEARCH_REGION), None, fx=self.scale, fy=self.scale,
+                          interpolation=cv2.INTER_AREA)
+        for template in self.templates:
+            if template.shape[0] <= crop.shape[0] and template.shape[1] <= crop.shape[1]:
+                if cv2.matchTemplate(crop, template, cv2.TM_CCOEFF_NORMED).max() >= config.MATCH_THRESHOLD:
+                    return True
+        return False

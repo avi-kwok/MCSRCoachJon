@@ -1,0 +1,714 @@
+/* MCSR Coach Jon - Minecraft GUI look, themed on the dirt block.
+   Rules: square corners everywhere, hard pixel bevels (light top/left, dark
+   bottom/right), no blur, no gradients except bevels and the hatch pattern. */
+
+:root {
+  /* dirt */
+  --dirt-1: #866043;
+  --dirt-2: #6c4a30;
+  --dirt-3: #593d29;
+  --dirt-4: #9b7653;
+  --dirt-5: #b9855c;
+  --grass: #5d9c3a;
+  --dirt-bg-fallback: #2a1e15;
+
+  /* Minecraft GUI greys */
+  --panel: #c6c6c6;
+  --bevel-hi: #ffffff;
+  --bevel-lo: #555555;
+  --slot: #8b8b8b;
+  --slot-lo: #373737;
+  --outline: #000000;
+  --gui-text: #3f3f3f;
+
+  /* buttons */
+  --btn: #6f6f6f;
+  --btn-hi: #a9a9a9;
+  --btn-lo: #3c3c3c;
+  --btn-hover: #7b86c4;
+  --btn-hover-hi: #b9c2f0;
+  --btn-hover-lo: #3e4677;
+
+  /* text */
+  --text: #ffffff;
+  --text-shadow: #3f3f3f;
+  --text-muted: #a8a8a8;
+  --gold: #ffaa00;
+  --red: #ff5555;
+  --green: #55ff55;
+
+  --px: 2px; /* one "GUI pixel" */
+  --font-pixel: "Press Start 2P", ui-monospace, monospace;
+  --font-body: "VT323", ui-monospace, monospace;
+  --fs-body: 20px;
+  --fs-body-sm: 18px; /* phones */
+
+  /* accent: deep navy. Only on the light grey panels - too dark for the dirt background.
+     On --panel (#c6c6c6) it is 9.0:1 contrast (WCAG AA needs 4.5:1). */
+  --accent-navy: #00117c;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  border-radius: 0 !important;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background-color: var(--dirt-bg-fallback);
+  background-image: var(--dirt-dark);
+  background-size: 64px 64px; /* 16px tile x4 */
+  image-rendering: pixelated;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: var(--fs-body);
+  line-height: 1.15;
+  text-shadow: var(--px) var(--px) 0 var(--text-shadow);
+  overflow-x: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+h1,
+h2 {
+  font-family: var(--font-pixel);
+  font-weight: normal;
+  margin: 0;
+}
+
+/* ---------- building blocks ---------- */
+
+.panel {
+  background: var(--panel);
+  color: var(--gui-text);
+  text-shadow: none;
+  border: var(--px) solid var(--outline);
+  box-shadow:
+    inset var(--px) var(--px) 0 var(--bevel-hi),
+    inset calc(-1 * var(--px)) calc(-1 * var(--px)) 0 var(--bevel-lo),
+    inset calc(2 * var(--px)) calc(2 * var(--px)) 0 #dbdbdb,
+    inset calc(-2 * var(--px)) calc(-2 * var(--px)) 0 #9a9a9a;
+}
+
+/* Inventory-slot inset, drawn *outside* the box so the inner width is untouched
+   (the video and the timeline bars must have exactly the same width). */
+.slot {
+  background: var(--slot);
+  box-shadow:
+    calc(-1 * var(--px)) calc(-1 * var(--px)) 0 var(--slot-lo),
+    var(--px) var(--px) 0 var(--bevel-hi);
+}
+
+.mc-button {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  background: var(--btn);
+  color: var(--text);
+  text-shadow: var(--px) var(--px) 0 var(--text-shadow);
+  border: var(--px) solid var(--outline);
+  box-shadow:
+    inset var(--px) var(--px) 0 var(--btn-hi),
+    inset calc(-1 * var(--px)) calc(-1 * var(--px)) 0 var(--btn-lo);
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  padding: 10px 14px;
+}
+.mc-button:hover,
+.mc-button:focus-visible {
+  background: var(--btn-hover);
+  color: #ffffa0;
+  border-color: var(--bevel-hi);
+  box-shadow:
+    inset var(--px) var(--px) 0 var(--btn-hover-hi),
+    inset calc(-1 * var(--px)) calc(-1 * var(--px)) 0 var(--btn-hover-lo);
+  outline: none;
+}
+.mc-button:disabled {
+  cursor: default;
+  background: #2d2d2d;
+  color: #a0a0a0;
+  box-shadow: none;
+}
+/* keyboard focus inside the grey panels: navy accent */
+.panel .mc-button:focus-visible,
+.panel .mc-check:focus-visible,
+.panel .timeline-area:focus-visible {
+  outline: var(--px) solid var(--accent-navy);
+  outline-offset: var(--px);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+/* ---------- header ---------- */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
+  /* --grass-h of grass on top; the vertical padding is equal *below* it, so the
+     title and picker are centred on the dirt part only. */
+  --grass-h: calc(6px + var(--px));
+  padding: calc(14px + var(--grass-h)) 24px 14px;
+  background-image: var(--dirt);
+  background-size: 64px 64px;
+  border-bottom: var(--px) solid var(--outline);
+  box-shadow: 0 var(--px) 0 var(--dirt-3), 0 calc(2 * var(--px)) 0 var(--outline);
+  position: relative;
+}
+/* the thin grass strip on top of the header block */
+.topbar::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 6px;
+  background: var(--grass);
+  box-shadow: 0 var(--px) 0 #3f6e27;
+}
+
+.title {
+  font-size: clamp(14px, 2.4vw, 22px);
+  color: var(--text);
+  text-shadow: 3px 3px 0 var(--text-shadow);
+  letter-spacing: 1px;
+}
+
+.picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.picker-label {
+  font-family: var(--font-pixel);
+  font-size: 10px;
+}
+
+/* ---------- run dropdown (Minecraft text-field look: black, grey bevelled border) ---------- */
+.dropdown {
+  position: relative;
+  min-width: 0;
+}
+.dropdown-button {
+  appearance: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: min(60vw, 420px);
+  min-width: 240px;
+  padding: 5px 10px 6px;
+  background: #000;
+  color: #e0e0e0;
+  text-shadow: var(--px) var(--px) 0 #3f3f3f;
+  border: var(--px) solid #a0a0a0;
+  box-shadow:
+    0 0 0 var(--px) #000,
+    inset var(--px) var(--px) 0 #373737;
+  text-align: left;
+  font-size: 1.05em;
+}
+.dropdown-button:hover,
+.dropdown-button:focus-visible,
+.dropdown-button[aria-expanded="true"] {
+  border-color: #fff;
+  outline: none;
+}
+.dropdown-button:disabled {
+  cursor: default;
+  color: #a0a0a0;
+  border-color: #6a6a6a;
+}
+.dropdown-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.dropdown-arrow {
+  flex: none;
+  font-size: 0.7em;
+  color: #a0a0a0;
+}
+.dropdown-list {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + var(--px) * 2);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: var(--px);
+  list-style: none;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: #000;
+  border: var(--px) solid #fff;
+  box-shadow:
+    0 0 0 var(--px) #000,
+    calc(3 * var(--px)) calc(3 * var(--px)) 0 rgba(0, 0, 0, 0.55);
+  outline: none;
+}
+.dropdown-option {
+  cursor: pointer;
+  padding: 4px 8px 5px 22px;
+  position: relative;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #e0e0e0;
+  border: var(--px) solid transparent;
+}
+.dropdown-option.active {
+  background: #2c2c2c;
+  border-color: #a0a0a0;
+}
+.dropdown-option.selected::before {
+  content: "▶";
+  position: absolute;
+  left: 7px;
+  font-size: 0.6em;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #fff;
+}
+/* run title parts: Minecraft chat colours, on black (gold 10.6:1, red 6.4:1) */
+.run-won {
+  color: var(--gold);
+}
+.run-lost {
+  color: var(--red);
+}
+.run-sep {
+  color: #a0a0a0;
+}
+
+/* ---------- page ---------- */
+
+.content {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px 24px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.notice {
+  padding: 18px 20px;
+}
+.notice h2 {
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+.notice code {
+  display: block;
+  margin-top: 8px;
+  overflow-x: auto;
+}
+.notice.error {
+  color: #aa0000;
+}
+
+/* ---------- review: video + timeline ---------- */
+
+.review {
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.player {
+  background: #000;
+  line-height: 0;
+}
+.player video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+}
+.no-video {
+  aspect-ratio: 16 / 9;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  line-height: 1.2;
+  padding: 16px;
+  text-align: center;
+}
+
+.timeline-area {
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+  padding-bottom: 2px;
+}
+
+.track + .track {
+  margin-top: 6px;
+}
+.track-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 20px; /* same height with or without the checkbox: no jump on select */
+  margin: 0 0 3px;
+}
+.track-label {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  color: var(--gui-text);
+  padding-left: 8px; /* clear of the playhead when it sits at 0:00 */
+}
+.track-bar {
+  position: relative;
+  height: 26px;
+  overflow: hidden;
+}
+.track-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 0.82em;
+  color: #e8e8e8;
+  text-shadow: 1px 1px 0 #3f3f3f;
+}
+
+.block {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  /* pixel bevel on each block so they read as little tiles */
+  box-shadow:
+    inset 0 var(--px) 0 rgba(255, 255, 255, 0.35),
+    inset 0 calc(-1 * var(--px)) 0 rgba(0, 0, 0, 0.35);
+}
+.block:hover {
+  outline: var(--px) solid #fff;
+  outline-offset: -2px;
+  z-index: 2;
+}
+.block:focus-visible {
+  outline: var(--px) solid #fff;
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px var(--accent-navy);
+  z-index: 2;
+}
+
+/* ---- Splits + Detailed Segments blocks (label inside) ---- */
+.split-block,
+.segment-block {
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 0.82em;
+  white-space: nowrap;
+  text-shadow: none;
+}
+.split-name {
+  overflow: hidden;
+  text-overflow: clip;
+}
+.track-bar.has-selection .split-block:not(.selected) {
+  filter: saturate(0.35) brightness(0.8);
+}
+.split-block.selected {
+  z-index: 1;
+  box-shadow:
+    inset 0 0 0 var(--px) #fff,
+    inset 0 0 0 calc(2 * var(--px)) var(--accent-navy);
+}
+/* navy bracket under the selected split */
+.split-range-row {
+  position: relative;
+  height: 6px;
+  margin-top: 2px;
+}
+.split-range {
+  position: absolute;
+  top: 0;
+  height: 4px;
+  background: var(--accent-navy);
+}
+
+/* Minecraft options-style checkbox */
+.mc-check {
+  flex: none;
+  position: relative;
+  z-index: 5; /* above the after-run-end hatch */
+  background: var(--panel);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 2px;
+  border: 0;
+  cursor: pointer;
+  color: var(--gui-text);
+  text-shadow: none;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+}
+.mc-check-box {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  background: #1e1e1e;
+  border: var(--px) solid #000;
+  box-shadow:
+    inset var(--px) var(--px) 0 #555,
+    0 0 0 var(--px) #a0a0a0;
+  color: #55ff55;
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1;
+}
+.mc-check:hover .mc-check-box {
+  box-shadow:
+    inset var(--px) var(--px) 0 #555,
+    0 0 0 var(--px) #fff;
+}
+
+.ticks {
+  position: relative;
+  height: 22px;
+  margin-top: 6px;
+}
+.tick {
+  position: absolute;
+  top: 0;
+  width: var(--px);
+  height: 5px;
+  background: #6a6a6a;
+}
+.tick.major {
+  height: 8px;
+  background: var(--gui-text);
+}
+.tick span {
+  position: absolute;
+  top: 8px;
+  left: 0;
+  transform: translateX(-50%);
+  font-size: 0.78em;
+  color: var(--gui-text);
+  white-space: nowrap;
+}
+.tick:first-child span {
+  transform: none;
+  left: 6px;
+}
+
+.after-end {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(40, 40, 40, 0.55) 0 4px,
+    rgba(120, 120, 120, 0.35) 4px 8px
+  );
+  z-index: 3;
+}
+
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  margin-left: -1px;
+  background: var(--accent-navy);
+  box-shadow: 0 0 0 1px #fff; /* keeps it visible on dark blocks */
+  pointer-events: none;
+  z-index: 4;
+}
+
+.tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 10;
+  /* Minecraft item tooltip: near-black with a purple border */
+  background: #100010;
+  border: var(--px) solid #25015b;
+  outline: var(--px) solid #100010;
+  color: #fff;
+  font-size: 0.86em;
+  padding: 3px 8px;
+  text-shadow: var(--px) var(--px) 0 #3e3e3e;
+}
+.tooltip-notes {
+  color: #a8a8a8;
+  white-space: normal;
+  max-width: 320px;
+}
+.tooltip strong {
+  font-weight: normal;
+  color: #ffff55;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-top: 8px;
+  color: var(--gui-text);
+  font-size: 0.86em;
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.legend-item i {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  border: var(--px) solid #373737;
+}
+.legend-item i.hatch {
+  background: repeating-linear-gradient(-45deg, #555 0 3px, #a0a0a0 3px 6px);
+}
+
+/* ---------- feedback / tips ---------- */
+
+.section-title {
+  font-size: 14px;
+  margin-bottom: 14px;
+  text-shadow: 3px 3px 0 var(--text-shadow);
+}
+
+.tips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr));
+  gap: 14px;
+}
+.tips li {
+  display: flex;
+}
+
+.tip {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--gui-text);
+}
+.tip:hover {
+  outline: var(--px) solid #fff;
+  outline-offset: 0;
+}
+/* drawn inside the card: the navy accent only reads on the grey panel */
+.tip:focus-visible {
+  outline: var(--px) dashed var(--accent-navy);
+  outline-offset: -8px;
+}
+.tip.active {
+  background: #e3dca4;
+  border-color: var(--accent-navy);
+  box-shadow:
+    inset 0 0 0 var(--px) var(--accent-navy),
+    inset calc(2 * var(--px)) calc(2 * var(--px)) 0 #fffbe0;
+}
+
+.tip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.badge {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  padding: 5px 6px 4px;
+  color: #fff;
+  text-shadow: 1px 1px 0 #222;
+  border: var(--px) solid #000;
+  text-transform: uppercase;
+}
+.kind-stat {
+  background: #7d7d7d;
+}
+.kind-micro {
+  background: #b07a1f;
+}
+.kind-macro {
+  background: #2c8f8b;
+}
+.kind-risk {
+  background: #a3261d;
+}
+.tip-time {
+  font-size: 0.9em;
+  color: var(--accent-navy);
+}
+.tip-title {
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  line-height: 1.5;
+  color: #262626;
+}
+.tip-text {
+  font-size: 0.9em;
+  line-height: 1.1;
+}
+.tip-loss {
+  font-size: 0.82em;
+  color: #aa0000;
+}
+
+/* ---------- narrow screens ---------- */
+
+@media (max-width: 640px) {
+  body {
+    font-size: var(--fs-body-sm);
+  }
+  .topbar {
+    padding: calc(14px + var(--grass-h)) 16px 14px;
+  }
+  .picker,
+  .dropdown,
+  .dropdown-button {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+  }
+  .content {
+    padding: 16px 16px 48px;
+  }
+  .review {
+    padding: 10px;
+  }
+}
