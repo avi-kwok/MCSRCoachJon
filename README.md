@@ -1,6 +1,6 @@
-# mcsr-vod-analyzer
+# MCSR Coach Jon
 
-Analyzes a user-given Minecraft speedrun (MCSR Ranked, 1.16.1) POV video through Computer Vision and integrated LLM for reasoning.
+A personal coach that reviews and analyzes a user-given Minecraft speedrun (MCSR Ranked, 1.16.1) POV video through Computer Vision and integrated LLM for reasoning. Provides feedback (TBD) based on the run and the user's skill level. Named after the person who introduced me to MCSR and my MCSR coach - Jon
 
 ```bash
 Current features:
