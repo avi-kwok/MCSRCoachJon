@@ -9,14 +9,16 @@ interface Props {
 }
 
 /** One run's title: date — Won/Lost (coloured) final time. */
-function Title({ run }: { run: RunSummary }) {
+function Title({ run, showId = false }: { run: RunSummary; showId?: boolean }) {
   const t = runTitle(run);
   return (
     <span className="run-title">
       <span className="run-date">{t.date}</span>
+      {t.estimated && <span className="run-est"> est.</span>}
       <span className="run-sep"> — </span>
       {t.outcome && <span className={t.outcome === "Won" ? "run-won" : "run-lost"}>{t.outcome} </span>}
       <span className="run-time">{t.time}</span>
+      {showId && t.date !== run.id && <span className="run-id"> · {run.id}</span>}
     </span>
   );
 }
@@ -143,7 +145,7 @@ export default function RunPicker({ runs, value, onChange }: Props) {
                 onMouseEnter={() => setActive(i)}
                 onClick={() => pick(i)}
               >
-                <Title run={r} />
+                <Title run={r} showId />
               </li>
             ))}
           </ul>

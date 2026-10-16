@@ -19,17 +19,28 @@ Steps:
 2. **World resets**: MCSR's "Are you sure you want to reset this world?" dialog,
    or an advancement title that shows up a second time (each advancement can
    only be earned once per world). Only toasts after the last reset count.
-3. **Dimension timeline**: the raw labels are smoothed by a sliding majority
-   vote and short stays are dropped, giving sustained overworld/nether/end
-   stretches.
-4. Splits: entered_nether / found_bastion / found_fortress / found_stronghold /
-   entered_end from their toasts (dimension transitions as fallback for
-   nether/end); finding_stronghold = first sustained nether -> overworld
-   transition after the fortress (or bastion/nether entry). overworld = 0:00.
+3. **Portal transitions** (transition.py): every nether-portal trip shows the
+   vanilla dirt loading screen (samples.csv `loading`); the first sample after
+   it is the first rendered frame of the new dimension. A long purple
+   portal-overlay stretch (`portal`) that ends without a sampled loading screen
+   is a weaker candidate. Which dimension is on each side comes from the F3
+   dimension line (strong) and the colour labels in the seconds before / after,
+   and from the alternation overworld <-> nether when one side has no evidence.
+4. **Dimension timeline** (fallback when no transition is seen): the raw labels
+   are smoothed by a sliding majority vote and short stays are dropped, giving
+   sustained overworld/nether/end stretches.
+5. Splits: entered_nether = the overworld -> nether transition (its toast when
+   no transition was seen); finding_stronghold = the first nether -> overworld
+   transition after the nether goals (the "blind" travel); found_fortress = the
+   first sustained moment the player stands on nether bricks (fortress.py,
+   samples.csv `brick`), never later than the "A Terrible Fortress" toast,
+   which is kept as `official_s`; found_bastion / found_stronghold /
+   entered_end from their toasts (End colours as fallback). overworld = 0:00.
 """
 
 import csv
 from collections import Counter
+from itertools import takewhile
 from pathlib import Path
 
 from . import config
@@ -41,7 +52,7 @@ SPLIT_ORDER = ["overworld", "entered_nether", "found_bastion", "found_fortress",
 SPLIT_RANK = {"overworld": 0, "entered_nether": 1, "found_bastion": 2, "found_fortress": 2,
               "finding_stronghold": 3, "found_stronghold": 4, "entered_end": 5}
 
-TOAST_FIELDS = ["time_s", "window", "slot", "k", "full", "title", "score"]
+TOAST_FIELDS = ["time_s", "window", "slot", "k", "full", "title", "score", "icon", "icon_score"]
 
 
 def mmss(seconds):
@@ -57,7 +68,8 @@ def write_toasts_csv(path, rows):
         writer.writerow(TOAST_FIELDS)
         for r in rows:
             writer.writerow([f"{r['time_s']:.2f}", r["window"], r["slot"], f"{r['k']:.2f}",
-                             int(r["full"]), r["title"] or "", f"{r['score']:.3f}"])
+                             int(r["full"]), r["title"] or "", f"{r['score']:.3f}",
+                             r.get("icon") or "", f"{r.get('icon_score', 0.0):.3f}"])
 
 
 def read_toasts_csv(path):
@@ -65,9 +77,20 @@ def read_toasts_csv(path):
     if not path.is_file():
         return []
     with open(path, newline="") as f:
+        # `icon` / `icon_score` were added with the layout calibration; older files lack them.
         return [{"time_s": float(r["time_s"]), "window": r["window"], "slot": int(r["slot"]),
                  "k": float(r["k"]), "full": r["full"] == "1", "title": r["title"] or None,
-                 "score": float(r["score"])} for r in csv.DictReader(f)]
+                 "score": float(r["score"]), "icon": r.get("icon") or None,
+                 "icon_score": float(r.get("icon_score") or 0.0)} for r in csv.DictReader(f)]
+
+
+def advancement_of(row):
+    """The advancement a toast observation shows: its item icon (language-free) if recognised,
+    else the English title template's read (None if neither)."""
+    icon = row.get("icon")
+    if icon and icon in config.TOAST_ICON_ADVANCEMENTS:
+        return config.TOAST_ICON_ADVANCEMENTS[icon]
+    return row.get("title")
 
 
 # --- 1. toast tracks ------------------------------------------------------
@@ -85,7 +108,7 @@ def toast_tracks(rows):
                 tr = None
         if tr is None:
             tr = {"start": r["time_s"], "end": r["time_s"], "slot": r["slot"], "titles": Counter(),
-                  "best": {}, "state": "in", "first_read": None}
+                  "best": {}, "state": "in", "first_read": None, "how": Counter()}
             tracks.append(tr)
             open_by_slot[r["slot"]] = tr
         tr["end"] = r["time_s"]
@@ -93,9 +116,12 @@ def toast_tracks(rows):
             tr["state"] = "full"
         elif tr["state"] == "full":
             tr["state"] = "out"
-        if r["title"]:
-            tr["titles"][r["title"]] += 1
-            tr["best"][r["title"]] = max(tr["best"].get(r["title"], 0.0), r["score"])
+        adv = advancement_of(r)
+        if adv:
+            tr["titles"][adv] += 1
+            score = r.get("icon_score", 0.0) if r.get("icon") else r["score"]
+            tr["best"][adv] = max(tr["best"].get(adv, 0.0), score)
+            tr["how"][("icon" if r.get("icon") else "title")] += 1
             if tr["first_read"] is None:
                 tr["first_read"] = r["time_s"]
     out = []
@@ -111,7 +137,8 @@ def toast_tracks(rows):
             prev["score"] = max(prev["score"], tr["best"][title])
             continue
         out.append({"start": tr["start"], "end": tr["end"], "slot": tr["slot"], "title": title,
-                    "reads": reads, "score": tr["best"][title], "first_read": tr["first_read"]})
+                    "reads": reads, "score": tr["best"][title], "first_read": tr["first_read"],
+                    "how": "icon" if tr["how"]["icon"] else "title"})
     return out
 
 
@@ -202,7 +229,144 @@ def first_stretch(stretches, dim, after):
     return None
 
 
-# --- 4. splits ------------------------------------------------------------
+# --- 3. portal transitions --------------------------------------------------
+
+DIMS = ("overworld", "nether", "end")
+OTHER = {"overworld": "nether", "nether": "overworld"}
+
+
+def _loading_screens(samples, run_end):
+    """Stretches of loading-screen samples -> [{"start", "end", "t": first sample after}]."""
+    out = []
+    for i, s in enumerate(samples):
+        if s.time >= run_end:
+            break
+        if not getattr(s, "loading", False):
+            continue
+        if out and s.time - out[-1]["end"] <= config.LOADING_GAP_S:
+            out[-1]["end"], out[-1]["last_i"] = s.time, i
+        else:
+            out.append({"start": s.time, "end": s.time, "last_i": i, "kind": "loading"})
+    for ev in out:
+        nxt = next((s for s in samples[ev["last_i"] + 1:] if not getattr(s, "loading", False)), None)
+        ev["t"] = nxt.time if nxt is not None else ev["end"]
+    return out
+
+
+def _portal_ends(samples, run_end):
+    """Long purple portal-overlay stretches on world frames -> [{"start", "end", "t": first sample after}]."""
+    out, cur = [], None
+    for i, s in enumerate(samples):
+        if s.time >= run_end:
+            break
+        on = s.screen == "world" and getattr(s, "portal", 0.0) >= config.PORTAL_MIN_SHARE
+        if on:
+            if cur is not None and s.time - cur["end"] <= 0.3:
+                cur["end"], cur["last_i"] = s.time, i
+            else:
+                cur = {"start": s.time, "end": s.time, "last_i": i, "kind": "portal"}
+                out.append(cur)
+    keep = []
+    for ev in out:
+        if ev["end"] - ev["start"] < config.PORTAL_MIN_STAY_S or ev["last_i"] + 1 >= len(samples):
+            continue
+        nxt = samples[ev["last_i"] + 1]
+        if nxt.time - ev["end"] > config.PORTAL_MAX_GAP_S:
+            continue
+        ev["t"] = nxt.time
+        keep.append(ev)
+    return keep
+
+
+def _side_dimension(samples, a, b):
+    """Dimension evidence in [a, b): F3 reads weigh TRANSITION_F3_WEIGHT, colour reads 1 -> (dim or "", note)."""
+    votes = Counter()
+    for s in samples:
+        if s.time < a:
+            continue
+        if s.time >= b:
+            break
+        if s.dimension in DIMS and not getattr(s, "loading", False) and getattr(s, "portal", 0.0) < 0.3:
+            votes[s.dimension] += config.TRANSITION_F3_WEIGHT if getattr(s, "dim_src", "") == "f3" else 1
+    total = sum(votes.values())
+    note = ", ".join(f"{d} {n}" for d, n in votes.most_common())
+    if total < config.TRANSITION_MIN_VOTES:
+        return "", note
+    dim, n = votes.most_common(1)[0]
+    return (dim if n / total >= config.TRANSITION_MIN_SHARE else ""), note
+
+
+def portal_transitions(samples, run_end):
+    """Dimension changes through nether portals -> [{"t", "start", "kind", "before", "after", "how"}].
+
+    `t` = the first sample after the loading screen (first rendered frame of the new
+    dimension); `before` / `after` = dimension on each side ("" if unknown), `how` says
+    whether each side came from evidence or from the overworld <-> nether alternation.
+    """
+    events = _loading_screens(samples, run_end)
+    for ev in _portal_ends(samples, run_end):
+        # A portal overlay followed by a sampled loading screen is the same trip.
+        if not any(-0.05 <= lo["start"] - ev["end"] <= config.PORTAL_MAX_GAP_S + 0.5 for lo in events):
+            events.append(ev)
+    events.sort(key=lambda e: e["t"])
+    W = config.TRANSITION_WINDOW_S
+    for i, ev in enumerate(events):
+        prev_t = events[i - 1]["t"] if i > 0 else 0.0
+        next_start = events[i + 1]["start"] if i + 1 < len(events) else run_end
+        ev["before"], ev["before_note"] = _side_dimension(samples, max(prev_t, ev["start"] - W), ev["start"])
+        ev["after"], ev["after_note"] = _side_dimension(samples, ev["t"], min(next_start, ev["t"] + W))
+        ev["how"] = {"before": "evidence" if ev["before"] else "", "after": "evidence" if ev["after"] else ""}
+    # Weak (overlay-only) candidates need evidence on both sides that the dimension changed.
+    events = [e for e in events if e["kind"] == "loading" or (e["before"] and e["after"] and e["before"] != e["after"])]
+    # Fill unknown sides: nether portals alternate overworld <-> nether, and the side after one
+    # trip is the side before the next.
+    for _ in range(2):
+        for i, ev in enumerate(events):
+            if not ev["before"] and i > 0 and events[i - 1]["after"]:
+                ev["before"], ev["how"]["before"] = events[i - 1]["after"], "previous transition"
+            if not ev["after"] and ev["before"] in OTHER:
+                ev["after"], ev["how"]["after"] = OTHER[ev["before"]], "alternation"
+            if not ev["before"] and ev["after"] in OTHER and i > 0:
+                ev["before"], ev["how"]["before"] = OTHER[ev["after"]], "alternation"
+    return events
+
+
+def _transition_note(ev):
+    what = (f"loading screen {mmss(ev['start'])}-{mmss(ev['end'])}" if ev["kind"] == "loading"
+            else f"portal overlay {mmss(ev['start'])}-{mmss(ev['end'])}, no loading screen sampled")
+    sides = []
+    for side in ("before", "after"):
+        how = ev["how"].get(side) or "unknown"
+        detail = ev.get(f"{side}_note") if how == "evidence" else how
+        sides.append(f"{side}: {ev[side] or '?'} ({detail})")
+    return f"{ev['before'] or '?'} -> {ev['after'] or '?'} portal transition: {what}, first frame {mmss(ev['t'])}; " + "; ".join(sides)
+
+
+# --- 4b. fortress: standing on nether bricks -----------------------------------
+
+def fortress_arrival(samples, start, end, sustain_s):
+    """First sample in [start, end] where the nether-brick floor share holds for `sustain_s`
+    (>= FORTRESS_SUSTAIN_FRAC of the world samples) -> (time, median share) or (None, 0)."""
+    world = [s for s in samples if start <= s.time <= end + sustain_s and s.screen in ("world", "f3")]
+
+    def floor(w):
+        return w.brick >= config.FORTRESS_MIN_SHARE and getattr(w, "brick_up", 0.0) < config.FORTRESS_WALL_MAX
+
+    for i, s in enumerate(world):
+        if s.time > end:
+            break
+        if not floor(s):
+            continue
+        win = list(takewhile(lambda w: w.time <= s.time + sustain_s, world[i:]))
+        if len(win) < config.FORTRESS_MIN_SAMPLES * sustain_s / config.FORTRESS_SUSTAIN_S:
+            continue
+        on = [w for w in win if floor(w)]
+        if len(on) >= config.FORTRESS_SUSTAIN_FRAC * len(win):
+            return s.time, float(sorted(w.brick for w in win)[len(win) // 2])
+    return None, 0.0
+
+
+# --- 5. splits ------------------------------------------------------------
 
 def title_of(name):
     return config.ADVANCEMENT_TITLES.get(name, name.replace("_", " ").title())
@@ -224,7 +388,8 @@ def build_splits(run, samples, toast_rows):
         for t in tracks:
             if t["title"] == adv and t["start"] >= last_reset:
                 note = (f"'{title_of(adv)}' toast from {mmss(t['start'])}"
-                        f" (read {t['reads']}x, first at {mmss(t['first_read'])}, score {t['score']:.2f})")
+                        f" (read {t['reads']}x by {t.get('how', 'title')}, first at {mmss(t['first_read'])}, "
+                        f"score {t['score']:.2f})")
                 found[split] = (t["start"], note)
                 break
 
@@ -233,30 +398,74 @@ def build_splits(run, samples, toast_rows):
             return f"; no sustained {what} in the dimension signal"
         return f"; dimension signal: {what} at {mmss(dim_time)} ({dim_time - time:+.1f}s)"
 
+    events = [e for e in portal_transitions(samples, run_end) if e["t"] >= last_reset]
+    extra = {}            # split -> extra fields for analysis.json (found_fortress: official_s)
+
+    # entered_nether: the overworld -> nether transition (first rendered nether frame); its
+    # toast ("We Need to Go Deeper", ~0.2-0.4 s later) when no transition was seen.
     nether_dim = first_transition(stretches, "overworld", "nether", last_reset)
-    end_dim = first_stretch(stretches, "end", last_reset)
+    into_nether = next((e for e in events if e["after"] == "nether" and e["before"] != "nether"), None)
     if "entered_nether" in found:
         t, note = found["entered_nether"]
-        found["entered_nether"] = (t, note + cross_check(t, nether_dim, "overworld -> nether"))
+        if into_nether is not None and t - config.TRANSITION_TOAST_LEAD_S <= into_nether["t"] <= t + 1.0:
+            found["entered_nether"] = (into_nether["t"], _transition_note(into_nether)
+                                       + f"; toast: {note} ({t - into_nether['t']:+.1f}s)")
+        else:
+            found["entered_nether"] = (t, note + cross_check(t, nether_dim, "overworld -> nether"))
+    elif into_nether is not None:
+        found["entered_nether"] = (into_nether["t"], _transition_note(into_nether) + "; no toast read")
     elif nether_dim is not None:
-        found["entered_nether"] = (nether_dim, f"no toast read; first sustained overworld -> nether at {mmss(nether_dim)}")
+        found["entered_nether"] = (nether_dim, f"no toast or transition seen; first sustained overworld -> nether "
+                                               f"(colour) at {mmss(nether_dim)}")
+
+    end_dim = first_stretch(stretches, "end", last_reset)
     if "entered_end" in found:
         t, note = found["entered_end"]
         found["entered_end"] = (t, note + cross_check(t, end_dim, "first End stretch"))
     elif end_dim is not None:
         found["entered_end"] = (end_dim, f"no toast read; first sustained End stretch at {mmss(end_dim)}")
 
+    # found_fortress: first sustained moment standing on nether bricks, never after the toast.
+    blind_after_entry = None
+    if "entered_nether" in found:
+        n0 = found["entered_nether"][0]
+        blind_after_entry = next((e["t"] for e in events if e["t"] > n0 and e["before"] == "nether"
+                                  and e["after"] == "overworld"), None)
+        toast = found.get("found_fortress")
+        if toast is not None:
+            official = toast[0]
+            t_vis, share = fortress_arrival(samples, n0, official, config.FORTRESS_SUSTAIN_S)
+            extra["found_fortress"] = {"official_s": round(official, 2)}
+            if t_vis is not None:
+                found["found_fortress"] = (t_vis, f"standing on nether bricks from {mmss(t_vis)} (floor share "
+                                                  f"{share:.2f}, held {config.FORTRESS_SUSTAIN_S:.1f}s); official: "
+                                                  f"{toast[1]} ({official - t_vis:+.1f}s after)")
+            else:
+                found["found_fortress"] = (official, f"no nether-brick floor seen before the toast - using the "
+                                                     f"advancement time; {toast[1]}")
+        else:
+            limit = blind_after_entry if blind_after_entry is not None else run_end
+            t_vis, share = fortress_arrival(samples, n0, limit, config.FORTRESS_NO_TOAST_SUSTAIN_S)
+            if t_vis is not None:
+                found["found_fortress"] = (t_vis, f"standing on nether bricks from {mmss(t_vis)} (floor share "
+                                                  f"{share:.2f}, held {config.FORTRESS_NO_TOAST_SUSTAIN_S:.1f}s); "
+                                                  f"no 'A Terrible Fortress' toast read")
+
     # finding_stronghold: leaving the nether after the nether goals ("blind" travel).
     nether_goals = [n for n in ("found_fortress", "found_bastion", "entered_nether") if n in found]
     if nether_goals:
         anchor_name = max(nether_goals, key=lambda n: found[n][0])     # the later of bastion/fortress
         anchor = found[anchor_name][0]
-        t = first_transition(stretches, "nether", "overworld", anchor)
-        if t is not None:
-            limit = found.get("found_stronghold", (run_end, ""))[0]
-            if t < limit:
-                found["finding_stronghold"] = (t, f"first sustained nether -> overworld after "
-                                                  f"{anchor_name.replace('_', ' ')} ({mmss(anchor)})")
+        limit = found.get("found_stronghold", (run_end, ""))[0]
+        ev = next((e for e in events if e["t"] >= anchor and e["before"] == "nether" and e["after"] == "overworld"), None)
+        if ev is not None and ev["t"] < limit:
+            found["finding_stronghold"] = (ev["t"], _transition_note(ev) + f"; first after "
+                                                    f"{anchor_name.replace('_', ' ')} ({mmss(anchor)})")
+        else:
+            t = first_transition(stretches, "nether", "overworld", anchor)
+            if t is not None and t < limit:
+                found["finding_stronghold"] = (t, f"no portal transition seen; first sustained nether -> overworld "
+                                                  f"(colour) after {anchor_name.replace('_', ' ')} ({mmss(anchor)})")
 
     # Drop splits that contradict the run order (e.g. a misread toast).
     kept = {"overworld": (0.0, "video start (the match timer keeps running across seed resets)"
@@ -275,5 +484,5 @@ def build_splits(run, samples, toast_rows):
     for i, (name, (t, note)) in enumerate(ordered):
         end = ordered[i + 1][1][0] if i + 1 < len(ordered) else run_end
         splits.append({"name": name, "start_s": round(t, 2), "end_s": round(end, 2),
-                       "source": "cv", "evidence": note})
+                       "source": "cv", "evidence": note, **extra.get(name, {})})
     return splits, advancements

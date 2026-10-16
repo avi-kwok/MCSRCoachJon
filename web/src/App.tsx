@@ -17,6 +17,7 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [selectedSplit, setSelectedSplit] = useState<SplitName | null>(null);
   const [stopAtEnd, setStopAtEnd] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false); // video.mp4 missing / broken link
   // A split named in the page URL (#run=..&split=..) is selected once its run loads.
   const pendingSplit = useRef<string | null>(hashParam("split"));
 
@@ -34,6 +35,7 @@ export default function App() {
     setAnalysis(null);
     setSelectedSplit(null);
     setVideoDuration(null);
+    setVideoFailed(false);
     setCurrentTime(0);
     getRun(runId)
       .then((a) => {
@@ -54,8 +56,7 @@ export default function App() {
 
   const seek = useCallback(
     (t: number) => {
-      if (!video) return;
-      video.currentTime = t;
+      if (video) video.currentTime = t; // without a video the playhead + tips still follow
       setCurrentTime(t);
     },
     [video],
@@ -132,8 +133,16 @@ export default function App() {
           <>
             <section className="review panel" aria-label="Video review">
               <div className="player slot">
-                {run?.has_video === false ? (
-                  <div className="no-video">No video.mp4 for this run (analyzed with --no-video).</div>
+                {run?.has_video === false || videoFailed ? (
+                  <div className="no-video">
+                    <div>
+                      <h2 className="no-video-title">Video not available</h2>
+                      <p>
+                        No playable video.mp4 in runs/{runId}/ (analyzed with <span className="nowrap">--no-video</span>, or its link
+                        points nowhere). The timeline and feedback still work.
+                      </p>
+                    </div>
+                  </div>
                 ) : (
                   <video
                     key={runId}
@@ -147,6 +156,10 @@ export default function App() {
                       if (selected) e.currentTarget.currentTime = selected.start_s; // split from the URL
                     }}
                     onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                    onError={() => {
+                      setVideoFailed(true);
+                      setVideo(null);
+                    }}
                   />
                 )}
               </div>
@@ -154,6 +167,11 @@ export default function App() {
                 runEnd={analysis.run.run_end_s}
                 splits={splits}
                 detailed={analysis.detailed_segments ?? []}
+                opponent={analysis.opponent}
+                truth={analysis.truth}
+                finalTimeText={analysis.run.final_time_text}
+                result={analysis.run.result}
+                currentTime={currentTime}
                 duration={duration}
                 video={video}
                 selectedSplit={selectedSplit}

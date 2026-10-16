@@ -13,6 +13,11 @@ class Sample:
     still: bool = False
     dimension: str = ""   # overworld / nether / end / "" (unknown), see dimension.py
     reset: bool = False   # MCSR "reset this world?" dialog visible
+    dim_src: str = ""     # where `dimension` came from: "f3" (debug text) / "colour" / ""
+    loading: bool = False  # vanilla dirt-background loading screen (portal transition), see transition.py
+    brick: float = 0.0    # share of nether-brick floor in front of the feet (fortress.py; world/f3 only)
+    brick_up: float = 0.0  # ... and in the upper middle of the view (a brick wall, not a floor)
+    portal: float = 0.0   # share of the game view under the purple nether-portal overlay
 
 
 @dataclass

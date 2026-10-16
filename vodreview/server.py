@@ -7,10 +7,12 @@ API:
   GET /api/runs              list of runs
   GET /api/runs/{id}         that run's analysis.json, plus "detailed_segments" read live
                              from runs/{id}/detailed_segments.csv (user-authored; [] if absent)
+                             and "truth", the answer key from runs/{id}/truth.csv (null if absent)
   GET /api/runs/{id}/video   video.mp4 (supports HTTP Range requests, so seeking works)
 Everything else is the built frontend from web/dist.
 """
 
+import csv
 import json
 import re
 import sys
@@ -20,10 +22,59 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .report import read_detailed_segments
+from .report import parse_clock, read_detailed_segments
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def read_truth(path):
+    """Read runs/<id>/truth.csv (the hand-checked answer key) -> (truth or None, warnings).
+
+    Columns: kind,name,time,notes. kind is meta (name=status, time=draft/verified...),
+    split / opponent (name = split name, time = m:ss(.s), h:mm:ss or seconds) or
+    final (name=final_time -> time text as written; name=result -> win/loss).
+    Malformed rows are skipped with a warning.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return None, []
+    truth = {"status": None, "splits": [], "final_time_text": None, "result": None, "opponent_splits": []}
+    warnings = []
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            fields = {(name or "").strip().lower() for name in (reader.fieldnames or [])}
+            if not {"kind", "name", "time"} <= fields:
+                return None, [f"{path.name}: header must be kind,name,time,notes (got {reader.fieldnames})"]
+            for line, row in enumerate(reader, 2):
+                row = {(k or "").strip().lower(): (v or "").strip() if isinstance(v, str) else "" for k, v in row.items()}
+                kind, name, value = row.get("kind", "").lower(), row.get("name", ""), row.get("time", "")
+                try:
+                    if kind == "meta":
+                        if name.lower() == "status":
+                            truth["status"] = value or None
+                    elif kind == "final":
+                        if name.lower() == "final_time":
+                            truth["final_time_text"] = value or None
+                        elif name.lower() == "result":
+                            truth["result"] = value.lower() or None
+                        else:
+                            raise ValueError(f"unknown final row {name!r}")
+                    elif kind in ("split", "opponent"):
+                        if not name:
+                            raise ValueError("no split name")
+                        entry = {"name": name, "t_s": round(parse_clock(value), 3), "notes": row.get("notes", "")}
+                        truth["splits" if kind == "split" else "opponent_splits"].append(entry)
+                    else:
+                        raise ValueError(f"unknown kind {kind!r}")
+                except ValueError as err:
+                    warnings.append(f"{path.name} line {line}: {err} - skipped")
+    except (OSError, UnicodeDecodeError, csv.Error) as err:
+        return None, [f"{path.name}: could not read ({err})"]
+    truth["splits"].sort(key=lambda s: s["t_s"])
+    truth["opponent_splits"].sort(key=lambda s: s["t_s"])
+    return truth, warnings
 
 
 def create_app(runs_root):
@@ -47,8 +98,9 @@ def create_app(runs_root):
         runs = []
         if runs_root.is_dir():
             for child in sorted(runs_root.iterdir()):
-                if not (RUN_ID.match(child.name) and (child / "analysis.json").is_file()):
-                    continue
+                if not (RUN_ID.match(child.name) and child.resolve().parent == runs_root
+                        and (child / "analysis.json").is_file()):
+                    continue  # still being analyzed (no analysis.json yet) or not a run
                 try:
                     run = load(child)["run"]
                 except (ValueError, KeyError):
@@ -77,11 +129,17 @@ def create_app(runs_root):
         for warning in warnings:
             print(f"Warning ({run_id}): {warning}", file=sys.stderr)
         analysis["detailed_segments"] = segments
+        truth, warnings = read_truth(path / "truth.csv")
+        for warning in warnings:
+            print(f"Warning ({run_id}): {warning}", file=sys.stderr)
+        analysis["truth"] = truth
         return JSONResponse(analysis)
 
     @app.get("/api/runs/{run_id}/video")
     def get_video(run_id: str):
-        video = run_dir(run_id) / "video.mp4"
+        # The run folder must sit inside the runs root (checked by run_dir), but its video.mp4
+        # may be a symlink/hardlink to a recording stored anywhere: follow it.
+        video = (run_dir(run_id) / "video.mp4").resolve()
         if not video.is_file():
             raise HTTPException(404, "No video.mp4 for this run (analyzed with --no-video?)")
         return FileResponse(video, media_type="video/mp4")

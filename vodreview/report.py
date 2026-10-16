@@ -13,6 +13,8 @@ from pathlib import Path
 
 from . import config
 from .idle import Sample, Stretch
+from .f3 import build_state, read_f3_csv
+from .opponent import build_match_clock, build_opponent, read_clock_csv, read_opponent_csv
 from .splits import SPLIT_ORDER, build_splits, read_toasts_csv  # noqa: F401  (SPLIT_ORDER re-exported)
 
 ANALYSIS_VERSION = 1
@@ -120,10 +122,13 @@ def read_detailed_segments(path):
 # --- reading the CSVs back ------------------------------------------------
 
 def read_samples_csv(path):
-    # `dimension` / `reset` were added in v1.3; older files simply lack them.
+    # `dimension` / `reset` were added in v1.3, `dim_src` / `loading` / `brick` / `portal` with the
+    # transition + fortress detectors; older files simply lack them.
     with open(path, newline="") as f:
         return [Sample(float(r["time_s"]), float(r["motion_pct"]), r["screen"], r["still"] == "1",
-                       r.get("dimension") or "", r.get("reset") == "1")
+                       r.get("dimension") or "", r.get("reset") == "1", r.get("dim_src") or "",
+                       r.get("loading") == "1", float(r.get("brick") or 0.0), float(r.get("brick_up") or 0.0),
+                       float(r.get("portal") or 0.0))
                 for r in csv.DictReader(f)]
 
 
@@ -234,7 +239,7 @@ def build_tips(run, samples, sample_interval, screens, stretches):
 
 # --- analysis.json --------------------------------------------------------
 
-def build_analysis(run, samples, stretches, toast_rows=()):
+def build_analysis(run, samples, stretches, toast_rows=(), opponent_rows=None, clock_rows=None, f3_rows=None):
     sample_interval = run["sample_interval_s"]
     run_end = run["run_end_s"]
     screens = [{"start_s": round(a, 2), "end_s": round(b, 2), "screen": s}
@@ -269,23 +274,34 @@ def build_analysis(run, samples, stretches, toast_rows=()):
         "idle": [{"start_s": round(st.start, 2), "end_s": round(st.end, 2), "duration_s": round(st.duration, 2)}
                  for st in stretches],
         "tips": build_tips(run, samples, sample_interval, screens, stretches),
+        # Opponent progress + match clock from MCSR's panel (null if the run
+        # was analyzed before v1.4 and `opponent` was never run on it).
+        "opponent": build_opponent(run, opponent_rows),
+        "match_clock": build_match_clock(run, clock_rows),
+        # Game state (position, facing, dimension, biome) read from the F3 screen (f3.py);
+        # null when the run has no f3.csv.
+        "state": build_state(f3_rows, run, samples, splits),
     }
 
 
-def write_analysis_json(out_dir, run, samples, stretches, toast_rows=()):
+def write_analysis_json(out_dir, run, samples, stretches, toast_rows=(), opponent_rows=None, clock_rows=None,
+                        f3_rows=None):
     path = Path(out_dir, "analysis.json")
-    path.write_text(json.dumps(build_analysis(run, samples, stretches, toast_rows), indent=2) + "\n")
+    analysis = build_analysis(run, samples, stretches, toast_rows, opponent_rows, clock_rows, f3_rows)
+    path.write_text(json.dumps(analysis, indent=2) + "\n")
     return path
 
 
 def rebuild_json(out_dir):
-    """Rebuild analysis.json from samples.csv + idle.csv + toasts.csv + run.json (no CV)."""
+    """Rebuild analysis.json from run.json + samples/idle/toasts/opponent/clock/f3 CSVs (no CV)."""
     out_dir = Path(out_dir)
     for name in ("run.json", "samples.csv", "idle.csv"):
         if not (out_dir / name).exists():
             raise SystemExit(f"Missing {out_dir / name} - run `python -m vodreview analyze` first.")
     run = json.loads((out_dir / "run.json").read_text())
     path = write_analysis_json(out_dir, run, read_samples_csv(out_dir / "samples.csv"),
-                               read_idle_csv(out_dir / "idle.csv"), read_toasts_csv(out_dir / "toasts.csv"))
+                               read_idle_csv(out_dir / "idle.csv"), read_toasts_csv(out_dir / "toasts.csv"),
+                               read_opponent_csv(out_dir / "opponent.csv"), read_clock_csv(out_dir / "clock.csv"),
+                               read_f3_csv(out_dir / "f3.csv"))
     print(f"Wrote {path}")
     return path

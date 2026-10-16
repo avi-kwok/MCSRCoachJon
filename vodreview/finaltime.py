@@ -1,11 +1,13 @@
 """Final time: read "(MM:SS.mmm)" from the MCSR match-result screen.
 
 The result screen shows a title ("Victory!" gold on a win, red on a loss) and
-under it "Match Winner: <name> (<time>)". ResultDetector.locate() already finds
-the "Match Winner:" label by template matching; the time is on the same text
-row, to the right of it. That row is read with the glyph reader in
-vodreview/glyphs.py (threshold -> column projection -> font-pixel grid ->
-template match per glyph).
+under it "Match Winner: <name> (<time>)" on the subtitle row (vanilla title
+geometry: 10-26 GUI px below the screen centre, drawn at 2x the GUI scale).
+That row is found by GUI geometry at the measured scale - no label template -
+and the text line on it is read with the glyph reader in vodreview/glyphs.py
+(threshold -> column projection -> font-pixel grid -> template match per
+glyph); the "(MM:SS.mmm)" is found in the read by a regex (digits and
+brackets are language-free).
 
 Note: on a *loss* the line names the **winner** and shows the winner's time,
 not the runner's. We still read the time shown (it is the match's final time)
@@ -43,8 +45,22 @@ def parse_time(text, max_ms=None):
     return f"{minutes:02d}:{seconds:02d}.{millis:03d}", ms
 
 
+def read_result_line(frame, row_box, templates, max_ms=None):
+    """Read the subtitle row of the result screen -> (raw_text, parsed (text, ms) or None).
+
+    The row box spans the whole width the centred line can take; the text
+    band inside it is the run of rows holding light shadowed text.
+    """
+    x0, y0, x1, y1 = row_box
+    crop = frame[y0:y1, x0:x1]
+    if crop.size == 0:
+        return "", None
+    raw, _ = read_line(crop, templates, shadow=True)
+    return raw, parse_time(raw, max_ms)
+
+
 def read_time_in_frame(frame, label_box, templates, max_ms=None):
-    """Read the result line next to the "Match Winner:" label in one BGR frame.
+    """Read the result line in one BGR frame, starting right of the "Match Winner:" label box.
 
     Returns (raw_text, parsed) where parsed is (text, ms) or None.
     """
@@ -71,7 +87,7 @@ def consensus(texts):
     return None
 
 
-def read_final_time(video_path, start_s, end_s, duration_s, verbose=True):
+def read_final_time(video_path, start_s, end_s, duration_s, lay, verbose=True):
     """Read the final time from the result screen between start_s and end_s.
 
     Scans forward from start_s; once the "Match Winner:" label is found, reads
@@ -84,7 +100,7 @@ def read_final_time(video_path, start_s, end_s, duration_s, verbose=True):
     max_ms = int((duration_s + config.FINAL_TIME_SLACK_S) * 1000)
     cap = open_video(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    detector = ResultDetector(int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+    detector = ResultDetector(lay)
     index = int(round(start_s * fps))
     cap.set(cv2.CAP_PROP_POS_FRAMES, index)
     reads, first_seen = [], None
@@ -99,9 +115,15 @@ def read_final_time(video_path, start_s, end_s, duration_s, verbose=True):
                 ok, frame = cap.read()
                 if ok:
                     found = detector.locate(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+                    raw = parsed = None
                     if found:
-                        first_seen = t if first_seen is None else first_seen
+                        # English label found: read right of it (the tuning VOD's original reader) ...
                         raw, parsed = read_time_in_frame(frame, found[1], templates, max_ms)
+                    if parsed is None and (found or detector.language_free(frame)):
+                        # ... else the whole subtitle row (language-free)
+                        raw, parsed = read_result_line(frame, detector.line_box(), templates, max_ms)
+                    if raw is not None:
+                        first_seen = t if first_seen is None else first_seen
                         reads.append((round(t, 3), raw, parsed[0] if parsed else None))
                         if sum(1 for r in reads if r[2]) >= config.FINAL_TIME_MAX_READS:
                             break

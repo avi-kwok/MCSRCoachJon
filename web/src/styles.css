@@ -249,8 +249,10 @@ h2 {
   position: absolute;
   z-index: 50;
   top: calc(100% + var(--px) * 2);
-  left: 0;
-  right: 0;
+  right: 0; /* grows leftwards when a title + run id is wider than the button */
+  min-width: 100%;
+  width: max-content;
+  max-width: calc(100vw - 32px);
   margin: 0;
   padding: var(--px);
   list-style: none;
@@ -295,6 +297,11 @@ h2 {
 }
 .run-sep {
   color: #a0a0a0;
+}
+/* "est." after an estimated recording date (hover the title for where it came from) */
+.run-est,
+.run-id {
+  color: #8a8a8a;
 }
 
 /* ---------- page ---------- */
@@ -353,6 +360,19 @@ h2 {
   text-align: center;
 }
 
+.no-video-title {
+  font-size: 12px;
+  color: var(--text);
+  margin: 0 0 12px;
+}
+.nowrap {
+  white-space: nowrap;
+}
+.no-video p {
+  margin: 0;
+  max-width: 520px;
+}
+
 .timeline-area {
   position: relative;
   cursor: pointer;
@@ -376,6 +396,10 @@ h2 {
   font-size: 9px;
   color: var(--gui-text);
   padding-left: 8px; /* clear of the playhead when it sits at 0:00 */
+}
+.track-vs {
+  margin-left: 14px;
+  color: #a8201a; /* darker MC red: 5.0:1 on the grey panel */
 }
 .track-bar {
   position: relative;
@@ -440,6 +464,61 @@ h2 {
     inset 0 0 0 var(--px) #fff,
     inset 0 0 0 calc(2 * var(--px)) var(--accent-navy);
 }
+/* Opponent split marker: a thin red line through the bar with a pixel flag at its top.
+   Black outline so it reads on every split colour (gold, end stone, nether brick...). */
+.opp-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 14px; /* hit area; the visible line is the ::before */
+  margin-left: -1px; /* line centred on the time */
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  z-index: 3;
+}
+/* the line is broken in the middle (where block labels sit), so it never cuts a word */
+.opp-marker::before,
+.opp-marker::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 2px;
+  background: #ff5555;
+  box-shadow: 0 0 0 1px #000;
+}
+.opp-marker::before {
+  top: 0;
+  height: 9px;
+}
+.opp-marker::after {
+  bottom: 0;
+  height: 5px;
+}
+.opp-flag {
+  position: absolute;
+  top: 0;
+  left: 2px;
+  width: 9px;
+  height: 7px;
+  background: #ff5555;
+  border: 1px solid #000;
+  border-left: 0;
+  box-shadow: inset 0 -2px 0 #b82020;
+}
+.opp-marker:hover::before,
+.opp-marker:focus-visible::before,
+.opp-marker:hover::after,
+.opp-marker:focus-visible::after,
+.opp-marker:hover .opp-flag,
+.opp-marker:focus-visible .opp-flag {
+  background: #fff;
+  box-shadow: 0 0 0 1px #000;
+}
+.opp-marker:focus-visible {
+  outline: none;
+}
 /* navy bracket under the selected split */
 .split-range-row {
   position: relative;
@@ -451,6 +530,117 @@ h2 {
   top: 0;
   height: 4px;
   background: var(--accent-navy);
+}
+
+/* ---- Answer Key track (truth.csv): a gold pixel tick per truth split ---- */
+.truth-bar {
+  height: 22px;
+}
+.truth-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  margin-left: -5px; /* 12px hit area, tick centred on the time */
+  width: 12px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  z-index: 3;
+  color: #fff;
+  font-family: var(--font-body);
+}
+.truth-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 2px;
+  background: #ffdd55;
+  box-shadow: 0 0 0 1px #000;
+}
+/* Δ status pip at the foot of the tick */
+.truth-pip {
+  position: absolute;
+  left: 3px;
+  bottom: 2px;
+  width: 6px;
+  height: 6px;
+  border: 1px solid #000;
+  background: var(--pip);
+}
+.truth-marker.tone-good { --pip: #55ff55; }
+.truth-marker.tone-warn { --pip: #ffff55; }
+.truth-marker.tone-bad { --pip: #ff5555; }
+.truth-name {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.82em;
+  line-height: 1;
+  white-space: nowrap;
+  color: #fff;
+  text-shadow: 1px 1px 0 #000;
+  pointer-events: none;
+}
+.truth-marker:hover .truth-tick,
+.truth-marker:focus-visible .truth-tick {
+  background: #fff;
+  width: 4px;
+  left: 4px;
+}
+.truth-marker:hover .truth-name,
+.truth-marker:focus-visible .truth-name {
+  color: #ffff55;
+}
+.truth-marker:focus-visible {
+  outline: none;
+}
+.truth-draft {
+  color: #a8201a; /* same dark MC red as "vs <name>" */
+}
+.truth-status {
+  color: #1d6b12;
+}
+.truth-summary {
+  position: relative;
+  z-index: 5; /* above the after-run-end hatch */
+  cursor: default;
+  font-size: 0.86em;
+  color: var(--gui-text);
+  text-shadow: none;
+  white-space: nowrap;
+  padding-right: 6px;
+}
+/* Δ colours: dark on the grey panel, bright MC colours in the dark tooltip */
+.tone-good { color: #1d6b12; }
+.tone-warn { color: #7a5a00; }
+.tone-bad { color: #a8201a; }
+.tooltip .tone-good { color: #55ff55; }
+.tooltip .tone-warn { color: #ffff55; }
+.tooltip .tone-bad { color: #ff5555; }
+/* opponent answer-key flag: hollow */
+.opp-truth::before,
+.opp-truth::after {
+  display: none;
+}
+/* at the bar's bottom edge, so it never hides the detected flag at the top */
+.opp-truth .opp-flag {
+  top: auto;
+  bottom: 0;
+  left: 0;
+  width: 10px;
+  height: 8px;
+  background: none;
+  border: 2px solid #ff5555;
+  box-shadow: 0 0 0 1px #000, inset 0 0 0 1px #000;
+}
+.opp-truth:hover .opp-flag,
+.opp-truth:focus-visible .opp-flag {
+  background: none;
+  border-color: #fff;
+  box-shadow: 0 0 0 1px #000, inset 0 0 0 1px #000;
 }
 
 /* Minecraft options-style checkbox */
@@ -568,6 +758,12 @@ h2 {
   white-space: normal;
   max-width: 320px;
 }
+.tooltip-behind {
+  color: #ff5555;
+}
+.tooltip-ahead {
+  color: #55ff55;
+}
 .tooltip strong {
   font-weight: normal;
   color: #ffff55;
@@ -591,6 +787,28 @@ h2 {
   height: 14px;
   display: inline-block;
   border: var(--px) solid #373737;
+}
+.legend-item i.opp-legend {
+  border: 0;
+  width: 12px;
+  background:
+    linear-gradient(#ff5555, #ff5555) 1px 1px / 8px 5px no-repeat,
+    linear-gradient(#000, #000) 0 0 / 10px 7px no-repeat,
+    linear-gradient(#ff5555, #ff5555) 1px 0 / 2px 100% no-repeat,
+    linear-gradient(#000, #000) 0 0 / 4px 100% no-repeat;
+}
+.legend-item i.opp-legend.hollow {
+  width: 10px;
+  height: 8px;
+  background: none;
+  border: 2px solid #ff5555;
+  box-shadow: 0 0 0 1px #000;
+}
+.legend-item i.truth-legend {
+  border: 0;
+  width: 4px;
+  background: #ffdd55;
+  box-shadow: 0 0 0 1px #000;
 }
 .legend-item i.hatch {
   background: repeating-linear-gradient(-45deg, #555 0 3px, #a0a0a0 3px 6px);

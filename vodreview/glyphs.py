@@ -66,25 +66,27 @@ def column_runs(mask, min_pixels):
     return runs
 
 
-def segment_line(mask, font_px=None, top=None):
+def segment_line(mask, font_px=None, top=None, rows=FONT_ROWS, min_font_px=None):
     """Cut a one-line text mask into glyph grids.
 
     Returns (font_px, glyphs) where glyphs is a list of
-    {"x0", "x1", "grid" (bool array FONT_ROWS x width-in-font-pixels), "gap"}
+    {"x0", "x1", "grid" (bool array `rows` x width-in-font-pixels), "gap"}
     and "gap" is the empty space before the glyph in font pixels (>= 3 = a space).
+    `rows` = 7 for digits/capitals; 8 includes the descender row of g, p, q, y, _
+    (then pass `top` = the cap top, since lowercase letters start lower).
     """
     runs = column_runs(mask, min_pixels=2)
     if not runs:
         return None, []
     tops, bottoms = [], []
     for x0, x1 in runs:
-        rows = np.flatnonzero(mask[:, x0:x1].any(axis=1))
-        tops.append(rows[0])
-        bottoms.append(rows[-1] + 1)
+        ys = np.flatnonzero(mask[:, x0:x1].any(axis=1))
+        tops.append(ys[0])
+        bottoms.append(ys[-1] + 1)
     if font_px is None:
         # The tallest common glyph height is 7 font pixels (digits, capitals, brackets).
         font_px = float(np.median([b - t for t, b in zip(tops, bottoms)])) / FONT_ROWS
-    if font_px < config.GLYPH_MIN_FONT_PX:
+    if font_px < (config.GLYPH_MIN_FONT_PX if min_font_px is None else min_font_px):
         return font_px, []
     # The recording's downscale blends neighbouring font pixels, so a glyph can
     # show a 1-px empty column at a corner. Real gaps between glyphs are a whole
@@ -98,13 +100,13 @@ def segment_line(mask, font_px=None, top=None):
     runs = merged
     if top is None:
         top = int(np.median(tops))
-    band = mask[top:top + int(round(FONT_ROWS * font_px))].astype(np.float32)
-    if band.shape[0] < FONT_ROWS:
+    band = mask[top:top + int(round(rows * font_px))].astype(np.float32)
+    if band.shape[0] < rows:
         return font_px, []
     glyphs, prev_end = [], None
     for x0, x1 in runs:
         width = max(1, int(round((x1 - x0) / font_px)))
-        cells = cv2.resize(band[:, x0:x1], (width, FONT_ROWS), interpolation=cv2.INTER_AREA)
+        cells = cv2.resize(band[:, x0:x1], (width, rows), interpolation=cv2.INTER_AREA)
         gap = 0 if prev_end is None else int(round((x0 - prev_end) / font_px))
         glyphs.append({"x0": x0, "x1": x1, "grid": cells >= 0.5, "gap": gap})
         prev_end = x1

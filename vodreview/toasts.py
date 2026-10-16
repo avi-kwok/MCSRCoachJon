@@ -20,10 +20,24 @@ CV ideas used here:
 2. **Normalisation**: a fully shown toast is cut out and resized to its
    160x32 GUI-pixel grid, so text size no longer depends on GUI scale or
    recording resolution.
-3. **Template matching** (ToastReader): the start of the title row (GUI x
-   25-68: about 8 characters; the streamer's RTA timer overlay covers the
-   rest of slot 0) is compared with saved title crops in
+3. **Icon matching** (ToastReader.read_icon): the advancement's item icon is
+   drawn at GUI (8, 8), 16x16, on the flat fill. It is cut from the
+   canonical toast in colour and compared with icon templates
+   (calibration/toasts/icons/<item>.png) by normalised cross-correlation
+   with +-1 GUI px slack. Icons are the same in every game language, so this
+   is the primary recogniser. One icon can belong to two advancements
+   (obsidian: We Need to Go Deeper and Ice Bucket Challenge) - splits.py
+   tells those apart (title read, or the overworld -> nether transition).
+4. **Title template matching** (ToastReader.read): the start of the title row
+   (GUI x 25-68: about 8 characters; the streamer's RTA timer overlay covers
+   the rest of slot 0) is compared with saved title crops in
    calibration/toasts/ by normalised cross-correlation with +-2 px slack.
+   English only - kept as a secondary check and tie-break.
+
+Where to search comes from the layout (layout.json): the full view's toast
+stack (top right, 160 GUI px wide) and the top-right corner of every resized
+strip seen; the window a toast belongs to (full view or which strip) is the
+one whose right edge it hugs.
 """
 
 from dataclasses import dataclass
@@ -40,6 +54,8 @@ FILL_W, FILL_H = TOAST_W - 2 * FRAME_PX, TOAST_H - 2 * FRAME_PX   # 154 x 26
 # Title row inside the 160x32 grid (text drawn at GUI x 30, y 18; 8 rows incl. descenders).
 TITLE_PATCH = (25, 17, 69, 27)      # x0, y0, x1, y1 compared with the templates (RTA overlay starts at x ~71 in slot 0)
 TITLE_SLACK = 2                     # search the patch +-2 GUI px (alignment errors)
+ICON_XY, ICON_SIZE = (8, 8), 16     # item icon position / size inside the toast, GUI px
+ICON_SLACK = 1                      # search the icon +-1 GUI px
 
 
 @dataclass
@@ -59,12 +75,13 @@ def _fill_mask(bgr):
     return cv2.inRange(bgr, (lo, lo, lo), (hi, hi, hi))
 
 
-def _neutral_fill(bgr):
+def _neutral_fill(bgr, max_chroma=None):
     """Strict per-pixel test: toast fill grey and (almost) no colour."""
     lo, hi = config.TOAST_FILL_RANGE
     px = bgr.astype(np.int16)
     mn, mx = px.min(axis=2), px.max(axis=2)
-    return (mn >= lo) & (mx <= hi) & (mx - mn <= config.TOAST_FILL_MAX_CHROMA)
+    max_chroma = config.TOAST_FILL_MAX_CHROMA if max_chroma is None else max_chroma
+    return (mn >= lo) & (mx <= hi) & (mx - mn <= max_chroma)
 
 
 def _frame_grey(bgr):
@@ -75,17 +92,16 @@ def _frame_grey(bgr):
     return (mn >= lo) & (mx <= hi) & (mx - mn <= config.TOAST_FRAME_MAX_CHROMA)
 
 
-def _window_for(box, frame_w, frame_h):
-    """Pick the game window (full screen or a resized strip) the toast sits in.
+def _window_for(box, windows):
+    """Pick the game window (full view or a resized strip) the toast sits in.
 
     The toast is right-aligned in its window, so the window whose right edge is
     closest to the toast's right edge wins (among windows containing the box).
+    `windows` = {name: (x0, y0, x1, y1) px}.
     """
-    best, best_d = ("full", (0.0, 0.0, 1.0, 1.0)), None
+    best, best_d = ("full", windows["full"]), None
     right = box[0] + box[2]
-    windows = {"full": (0.0, 0.0, 1.0, 1.0), **config.RESIZED_LAYOUTS}
-    for name, (x0, y0, x1, y1) in windows.items():
-        wx0, wy0, wx1, wy1 = x0 * frame_w, y0 * frame_h, x1 * frame_w, y1 * frame_h
+    for name, (wx0, wy0, wx1, wy1) in windows.items():
         if not (wx0 - 4 <= box[0] and right <= wx1 + 4 and wy0 - 4 <= box[1] <= wy1):
             continue
         d = abs(wx1 - right)
@@ -94,12 +110,30 @@ def _window_for(box, frame_w, frame_h):
     return best
 
 
-def find_toasts(frame):
-    """All advancement-toast boxes (fully shown or sliding) in a BGR frame."""
-    fh, fw = frame.shape[:2]
-    rx0, ry0, rx1, ry1 = config.TOAST_SEARCH_REGION
-    ox, oy = int(rx0 * fw), int(ry0 * fh)
-    roi = frame[oy:int(ry1 * fh), ox:int(rx1 * fw)]
+def find_toasts(frame, lay, strip=None):
+    """All advancement-toast boxes (fully shown or sliding) in a BGR frame.
+
+    `lay` = the video's Layout (search region + windows); `strip` = the
+    resized strip shown in this frame (px), if any, also searched.
+    """
+    windows = lay.windows()
+    if strip is not None:
+        windows = dict(windows, current=tuple(strip))
+    boxes = []
+    for region in lay.toast_search_regions(strip):
+        for b in _find_in_region(frame, region, windows):
+            if not any(abs(b.x - o.x) <= 4 and abs(b.y - o.y) <= 4 for o in boxes):
+                boxes.append(b)
+    boxes.sort(key=lambda b: (b.window, b.slot))
+    return boxes
+
+
+def _find_in_region(frame, region, windows):
+    rx0, ry0, rx1, ry1 = region
+    ox, oy = int(rx0), int(ry0)
+    roi = frame[oy:int(ry1), ox:int(rx1)]
+    if roi.size == 0:
+        return []
     # Blobs are found on every 2nd pixel (4x cheaper); the edges are then
     # measured exactly at full resolution.
     mask = _fill_mask(roi[::2, ::2])
@@ -113,8 +147,14 @@ def find_toasts(frame):
         x, y, w, h0, _ = (int(v) for v in stats[i])
         if 2 * h0 < config.TOAST_MIN_HEIGHT_PX or w < 1.5 * h0:
             continue
+        # Small toasts (inside a resized strip, ~1 screen px per GUI px or less): video blur and
+        # 4:2:0 chroma subsampling bleed the frame line, the icon and the wallpaper next to the
+        # strip a few px into the fill, so the row tests below look at the middle of the box only
+        # and accept the frame line's chroma tolerance (the same rule at every scale, in GUI px).
+        small = 2 * h0 < config.TOAST_SMALL_FILL_PX
         # Cheap pre-check on the half-size mask: some row near the top is almost all fill.
-        if (mask[y:y + max(1, h0 // 6), x:x + w].mean(axis=1) < 0.7 * 255).all():
+        mx0 = max(0, int(round(config.TOAST_SMALL_EDGE_SHARE * w))) if small else 0
+        if (mask[y:y + max(1, h0 // 6), x + mx0:x + w - mx0].mean(axis=1) < 0.7 * 255).all():
             continue
         x, y = max(0, 2 * x - 2), max(0, 2 * y - 2)
         w, h0 = min(rw - x, 2 * w + 4), min(rh - y, 2 * h0 + 4)
@@ -125,18 +165,28 @@ def find_toasts(frame):
         # more reliable bottom edge than the fill itself.)
         strip = roi[y:min(roi.shape[0], y + h0 + 4), x:x + w]
         inner = strip[:, 3:-3]                     # row tests without the padding / blurred ends
-        fill_rows = _neutral_fill(inner).mean(axis=1)
+        chroma = None
+        if small:
+            e = int(round(config.TOAST_SMALL_EDGE_SHARE * inner.shape[1]))
+            inner = inner[:, e:inner.shape[1] - e] if inner.shape[1] > 2 * e + 4 else inner
+            chroma = config.TOAST_FRAME_MAX_CHROMA
+        fill_rows = _neutral_fill(inner, chroma).mean(axis=1)
         good = np.flatnonzero(fill_rows[:max(2, int(0.15 * h0) + 1)] >= config.TOAST_BAND_MIN_FILL)
         if len(good) == 0:
             continue
         frame_rows = _frame_grey(inner).mean(axis=1)
         below = [r for r in range(int(0.75 * h0), len(frame_rows)) if frame_rows[r] >= config.TOAST_BAND_MIN_FILL]
         if not below:
+            # A timer/clock overlay drawn over the toast's lower right (common: MCSR's RTA
+            # lines, speedrun timers) hides the frame line there; the icon side is clear.
+            left = _frame_grey(inner[:, :max(4, int(config.TOAST_FRAME_LEFT_SHARE * inner.shape[1]))]).mean(axis=1)
+            below = [r for r in range(int(0.75 * h0), len(left)) if left[r] >= config.TOAST_BAND_MIN_FILL]
+        if not below:
             continue
         top_row = int(good[0])
         # Exact left/right edges from the clean top fill rows (the blob can be
         # a few px wider where the frame is blurred into the background).
-        cols = np.flatnonzero(_neutral_fill(strip[top_row:top_row + max(1, int(0.08 * h0))]).mean(axis=0) >= 0.5)
+        cols = np.flatnonzero(_neutral_fill(strip[top_row:top_row + max(1, int(0.08 * h0))], chroma).mean(axis=0) >= 0.5)
         if len(cols) < 2:
             continue
         x, w = x + int(cols[0]), int(cols[-1] - cols[0] + 1)
@@ -147,14 +197,13 @@ def find_toasts(frame):
         # Fully slid in = full width, within 1.5 GUI px (or 3 screen px for tiny, blurred toasts).
         full = w >= FILL_W * k - max(config.TOAST_FULL_SLACK_GUI_PX * k, 3)
         box = (x + ox, y + oy, w, h)
-        window, (wx0, wy0, wx1, wy1) = _window_for(box, fw, fh)
+        window, (wx0, wy0, wx1, wy1) = _window_for(box, windows)
         slot = int(round((box[1] - FRAME_PX * k - wy0) / (TOAST_H * k)))
         boxes.append(ToastBox(box[0], box[1], w, h, k, bool(full), window, max(0, slot)))
-    boxes.sort(key=lambda b: (b.window, b.slot))
     return boxes
 
 
-def canonical(frame, box, x_stretch=1.0):
+def canonical(frame, box, x_stretch=1.0, colour=False):
     """Cut a fully shown toast out and resize it to its 160x32 GUI-pixel grid (grayscale).
 
     Placed by the centre of the fill box. Scale = the larger of width/154 and
@@ -174,9 +223,26 @@ def canonical(frame, box, x_stretch=1.0):
     crop = frame[ya:yb, xa:xb]
     if crop.size == 0:
         return None
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    img = crop if colour else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     interp = cv2.INTER_AREA if k >= 1 else cv2.INTER_LINEAR
-    return cv2.resize(gray, (TOAST_W, TOAST_H), interpolation=interp)
+    return cv2.resize(img, (TOAST_W, TOAST_H), interpolation=interp)
+
+
+def icon_patch(canon_bgr, slack=0):
+    """The 16x16 GUI-px item icon at GUI (8, 8) of a colour canonical toast (+- slack)."""
+    x0, y0 = ICON_XY
+    return canon_bgr[y0 - slack:y0 + ICON_SIZE + slack, x0 - slack:x0 + ICON_SIZE + slack]
+
+
+def load_icon_templates(folder=None):
+    """calibration/toasts/icons/<item>.png (16x16 BGR) -> {item: float32 image}."""
+    folder = Path(folder or config.CALIBRATION_DIR / "toasts" / "icons")
+    out = {}
+    for path in sorted(folder.glob("*.png")) if folder.is_dir() else []:
+        image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if image is not None and image.shape[:2] == (ICON_SIZE, ICON_SIZE):
+            out[path.stem] = image.astype(np.float32)
+    return out
 
 
 def title_patch(canon, slack=0):
@@ -201,8 +267,26 @@ def load_toast_templates(folder=None):
 
 
 class ToastReader:
-    def __init__(self, templates=None):
+    def __init__(self, templates=None, icons=None):
         self.templates = load_toast_templates() if templates is None else templates
+        self.icons = load_icon_templates() if icons is None else icons
+
+    def read_icon(self, frame, box):
+        """Recognise a fully shown toast's item icon -> (item or None, best score, runner-up score)."""
+        if not box.full or box.k < config.TOAST_ICON_MIN_K or not self.icons:
+            return None, 0.0, 0.0
+        canon = canonical(frame, box, 1.0, colour=True)
+        if canon is None or canon.shape[:2] != (TOAST_H, TOAST_W):
+            return None, 0.0, 0.0
+        search = icon_patch(canon, ICON_SLACK).astype(np.float32)
+        scores = sorted(((float(cv2.matchTemplate(search, t, cv2.TM_CCOEFF_NORMED).max()), name)
+                         for name, t in self.icons.items()), reverse=True)
+        best, name = scores[0]
+        second = scores[1][0] if len(scores) > 1 else 0.0
+        min_score = config.TOAST_ICON_MIN_SCORE if box.k >= 1.5 else config.TOAST_ICON_MIN_SCORE_SMALL
+        if best < min_score or best - second < config.TOAST_ICON_MIN_MARGIN:
+            return None, best, second
+        return name, best, second
 
     def read(self, frame, box):
         """Recognise a fully shown toast -> (name or None, best score, runner-up score)."""

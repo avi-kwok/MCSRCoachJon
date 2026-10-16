@@ -76,6 +76,50 @@ export interface Tip {
   est_loss_s: number | null;
 }
 
+/** One split the opponent reached, read from the MCSR match HUD (video seconds, same clock as ours). */
+export interface OpponentSplit {
+  name: string; // usually a SplitName; unknown names are shown as-is
+  t_s: number;
+  raw?: string; // the HUD text it was read from, e.g. "Entered Bastion"
+  latency_s?: number;
+  source?: string;
+}
+
+export interface OpponentStatus {
+  raw: string;
+  t_s: number;
+}
+
+/** The opponent in a ranked match (missing in older files / non-match VODs). */
+export interface Opponent {
+  name?: string | null;
+  splits?: OpponentSplit[];
+  statuses?: OpponentStatus[];
+}
+
+/** How the in-game match clock maps to video time (video_s = match_s + offset_s). */
+export interface MatchClock {
+  offset_s: number;
+  spread_s?: number;
+  reads?: number;
+}
+
+/** One time from the answer key (runs/<id>/truth.csv), video seconds. */
+export interface TruthSplit {
+  name: string; // usually a SplitName
+  t_s: number;
+  notes: string;
+}
+
+/** The hand-checked answer key, merged in by the server (null without truth.csv). */
+export interface Truth {
+  status: string | null; // "draft" until the user has verified it
+  splits: TruthSplit[];
+  final_time_text: string | null;
+  result: string | null;
+  opponent_splits: TruthSplit[];
+}
+
 export interface Analysis {
   version: number;
   run: RunInfo;
@@ -86,6 +130,9 @@ export interface Analysis {
   screens: ScreenRun[];
   idle: IdleStretch[];
   tips: Tip[];
+  opponent?: Opponent | null; // missing in older files
+  match_clock?: MatchClock | null; // missing in older files
+  truth?: Truth | null; // added by the server from truth.csv, not in analysis.json
 }
 
 export interface RunSummary {

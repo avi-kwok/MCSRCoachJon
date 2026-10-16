@@ -7,7 +7,10 @@ Counting the pixels whose difference passes a threshold gives a simple
 so mouse movement shows up as high motion; standing still gives ~0%.
 
 Overlays that change on their own (timer, toasts, F3 debug text) are *masked*:
-those pixels are simply left out of the count.
+those pixels are simply left out of the count. The overlay rectangles come
+from the video's layout.json (measured by layout.calibrate from temporal
+statistics; the hand-written config.OVERLAY_MASK is only the fallback), the F3
+columns from the GUI scale.
 """
 
 import cv2
@@ -25,19 +28,20 @@ def build_mask(width, height, rectangles):
 
 
 class MotionMeter:
-    def __init__(self):
+    def __init__(self, lay):
         width, height = config.MOTION_SIZE
-        overlays = list(config.OVERLAY_MASK.values())
+        overlays = lay.overlay_rects()
         self.mask = build_mask(width, height, overlays)
         # With F3 open we also hide its text columns and pie chart.
-        self.f3_mask = build_mask(width, height, overlays + list(config.F3_MASK.values()))
+        self.f3_mask = build_mask(width, height, overlays + lay.f3_rects())
         self.previous = None
 
-    def measure(self, gray_frame, f3_visible=False):
+    def measure(self, gray_frame, f3_visible=False, small=None):
         """Return % of unmasked pixels that changed vs the previous call."""
         # Shrinking the frame (INTER_AREA = average neighbouring pixels) makes
         # it faster and also smooths out tiny compression noise.
-        small = cv2.resize(gray_frame, config.MOTION_SIZE, interpolation=cv2.INTER_AREA)
+        if small is None:
+            small = cv2.resize(gray_frame, config.MOTION_SIZE, interpolation=cv2.INTER_AREA)
         if self.previous is None:
             self.previous = small
             return 0.0
