@@ -183,7 +183,8 @@ The server only binds to `127.0.0.1`. There is no upload endpoint; runs are crea
 }
 ```
 
-- `run.result` is `"win"`, `"loss"` (read from the MCSR result screen) or `null` if no result screen was seen.
+- `run.result` is `"win"`, `"loss"`, `"draw"` (read from the MCSR result screen; a draw has no time) or `null` if no result screen was seen.
+- `run.private_room` is `true` / `false` from the MCSR panel's mode line ("Private Room" / "Ranked Mode", MCSR's own English text, templates in `calibration/panel/`), or `null` if not found. The UI shows a draw as "Forfeit" plus a "Private room" tag.
 - `run.final_time_ms` / `run.final_time_text`: the time in parentheses on the result screen,
   as milliseconds and `"MM:SS.mmm"`; both `null` if it couldn't be read. **On a loss the
   result line names the winner, so this is the winner's time**; `result` says which it was.
@@ -313,6 +314,10 @@ The server only binds to `127.0.0.1`. There is no upload endpoint; runs are crea
      (vanilla title geometry: title 4x at -40..-12 GUI px from the centre, subtitle 2x at
      +10..+26). The title is read in HSV colour space — gold = **win**, red = **loss**. On the
      three other players' videos only the language-free path fired.
+   - **draw** (a forfeit in a private room): an aqua title ("Match is over!") inside the 4x title
+     band plus a centred pure-white subtitle ("Match Draw!", no time), on 3 consecutive samples
+     -> `result: "draw"`, `end_reason: "forfeit"`. Private rooms title wins "Match is over!" in
+     gold too, which the gold path already reads.
    - **end of video** (forfeits, resets, cut recordings).
 
    After a dragon kill the video is read for up to 30 s more, only to find the result

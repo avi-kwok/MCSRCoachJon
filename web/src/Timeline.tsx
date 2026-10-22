@@ -1,12 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { DetailedSegment, Opponent, Span, Split, SplitName, Truth, TruthSplit } from "./types";
-import { SEGMENT_TONES, SPLITS } from "./colors";
+import type { DetailedSegment, Opponent, Span, Split, SplitName, Tip, Truth, TruthSplit } from "./types";
+import { SEGMENT_TONES, SPLITS, TIP_TONES } from "./colors";
 import { mmss, mmssDec, mmssTenths } from "./format";
 
 interface Props {
   runEnd: number;
   splits: Split[];
   detailed: DetailedSegment[];
+  tips: Tip[];
+  selectedTip: number | null; // index into tips
+  onSelectTip: (index: number) => void; // seek to the tip + highlight it in the list
   opponent?: Opponent | null;
   truth?: Truth | null; // answer key (truth.csv); adds the Answer Key track when present
   finalTimeText?: string | null; // detected final time / result, checked against the answer key
@@ -80,6 +83,9 @@ export default function Timeline({
   runEnd,
   splits,
   detailed,
+  tips,
+  selectedTip,
+  onSelectTip,
   opponent,
   truth,
   finalTimeText,
@@ -430,6 +436,52 @@ export default function Timeline({
     </div>
   );
 
+  // Tips track: one span per tip with a moment in the video (0-0 summaries are skipped).
+  const TIP_MIN_PX = 6;
+  const tipSpans = tips
+    .map((tip, i) => ({ tip, i }))
+    .filter(({ tip }) => !(tip.t_s === 0 && tip.end_s === 0) && tip.t_s <= duration);
+  const tipTone = (tip: Tip) => TIP_TONES[tip.coach?.fix_type ?? "cv"];
+  const tipsTrack = (
+    <div className="track">
+      <div className="track-head">
+        <span className="track-label">Tips</span>
+      </div>
+      <div className={`track-bar slot ${selectedTip != null ? "has-selection" : ""}`}>
+        {tipSpans.map(({ tip, i }) => {
+          const tone = tipTone(tip);
+          const end = Math.max(tip.end_s, tip.t_s);
+          const range = end > tip.t_s ? `${mmssTenths(tip.t_s)} - ${mmssTenths(end)}` : mmssTenths(tip.t_s);
+          const loss = tip.est_loss_s != null && tip.est_loss_s > 0 ? `~${tip.est_loss_s.toFixed(1)}s lost` : undefined;
+          const notes = [tone.label, loss].filter(Boolean).join(" · ");
+          return (
+            <button
+              key={i}
+              type="button"
+              className={`block tip-block ${selectedTip === i ? "selected" : ""}`}
+              style={{
+                left: pct(tip.t_s, duration),
+                width: `max(${TIP_MIN_PX}px, ${(100 * (Math.min(end, duration) - tip.t_s)) / duration}%)`,
+                background: tone.color,
+              }}
+              aria-label={`Tip: ${tip.title} ${range}${loss ? `, ${loss}` : ""}`}
+              aria-pressed={selectedTip === i}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectTip(i);
+              }}
+              onMouseMove={(e) => {
+                e.stopPropagation();
+                setHover({ x: xAt(e.clientX), title: tip.title, range, notes });
+              }}
+            />
+          );
+        })}
+        {tipSpans.length === 0 && <span className="track-empty">No tips with a moment in the video</span>}
+      </div>
+    </div>
+  );
+
   return (
     <div className="timeline">
       <div
@@ -442,6 +494,7 @@ export default function Timeline({
         {splitsTrack}
         {truthTrack}
         {detailedTrack}
+        {tipsTrack}
 
         <div className="ticks" aria-hidden>
           {ticks.map((m) => (
@@ -477,7 +530,7 @@ export default function Timeline({
         )}
       </div>
 
-      {(runEnd < duration || opponentSplits.length > 0 || truth) && (
+      {(runEnd < duration || opponentSplits.length > 0 || truth || tipSpans.length > 0) && (
         <div className="legend">
           {opponentSplits.length > 0 && (
             <span className="legend-item">
@@ -498,6 +551,13 @@ export default function Timeline({
               <span className="tone-bad">more / missed</span>
             </span>
           )}
+          {tipSpans.length > 0 &&
+            (["easy", "practice"] as const).map((k) => (
+              <span key={k} className="legend-item">
+                <i className="tip-legend" style={{ background: TIP_TONES[k].color }} />
+                {TIP_TONES[k].label}
+              </span>
+            ))}
           {runEnd < duration && (
             <span className="legend-item">
               <i className="hatch" />

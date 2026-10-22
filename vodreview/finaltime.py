@@ -22,9 +22,10 @@ import re
 from collections import Counter
 
 import cv2
+import numpy as np
 
 from . import config
-from .glyphs import load_glyph_templates, read_line
+from .glyphs import keep_shadowed, load_glyph_templates, match_glyph, read_line, segment_line, text_mask
 from .runend import ResultDetector
 from .video import open_video
 
@@ -57,6 +58,36 @@ def read_result_line(frame, row_box, templates, max_ms=None):
         return "", None
     raw, _ = read_line(crop, templates, shadow=True)
     return raw, parse_time(raw, max_ms)
+
+
+def read_result_time_right(frame, row_box, centre_x, font_px, templates, max_ms=None):
+    """Fallback for a cluttered subtitle row (F3 text, bright sand/snow behind it).
+
+    The time is the last part of the centred line, so only the row right of the screen
+    centre is read, at the known subtitle font size (2x GUI), with a few mask variants:
+    a stricter light threshold drops sand, and an opening (erode + dilate) of ~1.3 GUI px
+    removes the 1x F3 strokes but keeps the 2x subtitle strokes. The strict
+    "(MM:SS.mmm)" regex decides which variant read it. -> (raw_text, parsed or None)
+    """
+    x0, y0, x1, y1 = row_box
+    crop = frame[y0:y1, max(x0, int(centre_x)):x1]
+    if crop.size == 0:
+        return "", None
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    raw = ""
+    for min_light, open_gui in config.RESULT_TIME_MASK_VARIANTS:
+        mask = text_mask(crop, min_light=min_light)
+        if open_gui:
+            n = max(1, int(round(open_gui * font_px / 2)))
+            mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, np.ones((n, n), np.uint8)) > 0
+        mask = keep_shadowed(mask, gray, int(round(font_px)))
+        _, glyphs = segment_line(mask, font_px)
+        text = "".join((" " if gl["gap"] >= 3 else "") + match_glyph(gl["grid"], templates)[0] for gl in glyphs)
+        parsed = parse_time(text, max_ms)
+        if parsed:
+            return text, parsed
+        raw = raw or text
+    return raw, None
 
 
 def read_time_in_frame(frame, label_box, templates, max_ms=None):
@@ -121,7 +152,7 @@ def read_final_time(video_path, start_s, end_s, duration_s, lay, verbose=True):
                         raw, parsed = read_time_in_frame(frame, found[1], templates, max_ms)
                     if parsed is None and (found or detector.language_free(frame)):
                         # ... else the whole subtitle row (language-free)
-                        raw, parsed = read_result_line(frame, detector.line_box(), templates, max_ms)
+                        raw, parsed = detector.read_time(frame, max_ms)
                     if raw is not None:
                         first_seen = t if first_seen is None else first_seen
                         reads.append((round(t, 3), raw, parsed[0] if parsed else None))

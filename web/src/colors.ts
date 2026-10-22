@@ -19,3 +19,11 @@ export const SPLITS: { name: SplitName; label: string; short: string; color: str
   { name: "entered_end", label: "Entered End", short: "End", color: "#e0dc9c", ink: "#1e1e1e" },       // end stone
 ];
 
+
+// Tips track: coach tips coloured by how they get fixed (matches the .fix-easy / .fix-practice badges);
+// CV tips (no fix type) in neutral stone.
+export const TIP_TONES: Record<"easy" | "practice" | "cv", { color: string; ink: string; label: string }> = {
+  easy: { color: "#3f8f2c", ink: "#ffffff", label: "Easy fix" },
+  practice: { color: "#b07a1f", ink: "#ffffff", label: "Needs practice" },
+  cv: { color: "#7d7d7d", ink: "#ffffff", label: "Stat tip" },
+};

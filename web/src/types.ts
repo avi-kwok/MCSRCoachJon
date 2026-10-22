@@ -8,13 +8,15 @@ export interface RunInfo {
   duration_s: number;
   run_end_s: number;
   end_reason: string;
-  result: "win" | "loss" | null;
+  result: "win" | "loss" | "draw" | null;
   /** Time read from the result screen "(MM:SS.mmm)"; on a loss it is the winner's time. */
   final_time_ms?: number | null;
   final_time_text?: string | null;
   /** ISO local date-time of the recording, and where it came from. */
   recording_date?: string | null;
   date_source?: DateSource | null;
+  /** MCSR panel mode line: true = private room, false = ranked, null = not found. */
+  private_room?: boolean | null;
   analyzed_at: string;
 }
 
@@ -67,6 +69,36 @@ export interface IdleStretch extends Span {
   duration_s: number;
 }
 
+/** Extra fields on a tip imported from the LLM coach (`python -m vodreview import-tips`, coach/schema.json). */
+export interface CoachTipInfo {
+  id: string;
+  split: SplitName;
+  kind: "knowledge" | "mechanics";
+  known_at_time: string;
+  confidence: "low" | "med" | "high";
+  fix_type: "easy" | "practice";
+  severity_rank: number;
+  evidence: string[];
+  catalogue_id: string | null;
+  disagrees_with_catalogue: { id: string; reason: string } | null;
+  reference_route?: string | null; // knowledge/routes.md id
+}
+
+/** One entry of the learner's bastion route library (knowledge/routes.md, GET /api/routes). */
+export interface Route {
+  id: string;
+  type: "housing" | "treasure" | "bridge" | "stables";
+  entry: string;
+  url: string;
+  video_id: string;
+  start_s: number;
+  end_s: number | null;
+  runner: string | null;
+  time: string | null;
+  notes: string | null;
+  status: string;
+}
+
 export interface Tip {
   t_s: number;
   end_s: number;
@@ -74,6 +106,8 @@ export interface Tip {
   title: string;
   text: string;
   est_loss_s: number | null;
+  source?: "coach"; // missing on CV-generated tips
+  coach?: CoachTipInfo;
 }
 
 /** One split the opponent reached, read from the MCSR match HUD (video seconds, same clock as ours). */
@@ -138,12 +172,13 @@ export interface Analysis {
 export interface RunSummary {
   id: string;
   video_name: string;
-  result: "win" | "loss" | null;
+  result: "win" | "loss" | "draw" | null;
   run_end_s: number | null;
   final_time_text: string | null;
   final_time_ms: number | null;
   recording_date: string | null;
   date_source: DateSource | null;
+  private_room?: boolean | null;
   analyzed_at: string | null;
   has_video: boolean;
 }

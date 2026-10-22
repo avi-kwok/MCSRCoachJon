@@ -6,7 +6,7 @@ the frames) and `analysis.json` (written by the analyzer), compare:
 * our splits: signed error = detected - truth (s); |error| <= tolerance is a hit,
   outside it is "off", a truth split with no detection is a miss, a detected
   split the truth doesn't list is a false positive (FP);
-* the final time (exact ms match) and the result (win/loss);
+* the final time (exact ms match) and the result (win/loss/draw);
 * the opponent's splits, same as ours but with a looser tolerance (the panel is
   only read every 0.5 s and can be covered).
 

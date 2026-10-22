@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import config
 from .idle import Sample, Stretch
-from .f3 import build_state, read_f3_csv
+from .f3 import build_state, prefer_f3_dimension, read_f3_csv
 from .opponent import build_match_clock, build_opponent, read_clock_csv, read_opponent_csv
 from .splits import SPLIT_ORDER, build_splits, read_toasts_csv  # noqa: F401  (SPLIT_ORDER re-exported)
 
@@ -39,7 +39,8 @@ def mmss(seconds):
 # --- run.json -------------------------------------------------------------
 
 def write_run_json(out_dir, *, video, duration_s, run_end_s, end_reason, result, sample_interval_s,
-                   final_time_ms=None, final_time_text=None, recording_date=None, date_source=None):
+                   final_time_ms=None, final_time_text=None, recording_date=None, date_source=None,
+                   private_room=None):
     run = {
         "video": str(Path(video).resolve()),
         "duration_s": round(duration_s, 2),
@@ -52,6 +53,8 @@ def write_run_json(out_dir, *, video, duration_s, run_end_s, end_reason, result,
         "final_time_text": final_time_text,
         "recording_date": recording_date,
         "date_source": date_source,
+        # MCSR panel mode line: True = "Private Room", False = "Ranked Mode", None = not found
+        "private_room": private_room,
         "sample_interval_s": sample_interval_s,
         "analyzed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
@@ -196,7 +199,7 @@ def build_tips(run, samples, sample_interval, screens, stretches):
     tips = []
 
     result = run.get("result")
-    outcome = {"win": "Won", "loss": "Lost"}.get(result, "Ended")
+    outcome = {"win": "Won", "loss": "Lost", "draw": "Forfeit (draw)"}.get(result, "Ended")
     tips.append(tip(run_end, run_end, "stat", f"Run end {mmss(run_end)}",
                     f"{outcome} at {mmss(run_end)} ({run['end_reason']}).", None))
 
@@ -250,7 +253,8 @@ def build_analysis(run, samples, stretches, toast_rows=(), opponent_rows=None, c
     segments += [{"name": "idle", "start_s": round(st.start, 2), "end_s": round(st.end, 2), "source": "cv"}
                  for st in stretches]
     segments.sort(key=lambda s: (s["start_s"], s["name"]))
-    splits, advancements = build_splits(run, samples, list(toast_rows))
+    # Splits use the F3 dimension wherever a valid F3 read is near (colour labels are the fallback).
+    splits, advancements = build_splits(run, prefer_f3_dimension(samples, f3_rows), list(toast_rows))
 
     return {
         "version": ANALYSIS_VERSION,
@@ -265,6 +269,7 @@ def build_analysis(run, samples, stretches, toast_rows=(), opponent_rows=None, c
             "final_time_text": run.get("final_time_text"),
             "recording_date": run.get("recording_date"),
             "date_source": run.get("date_source"),
+            "private_room": run.get("private_room"),
             "analyzed_at": run["analyzed_at"],
         },
         "splits": splits,

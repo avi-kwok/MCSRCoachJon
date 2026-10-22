@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getRun, listRuns, videoUrl } from "./api";
-import type { Analysis, RunSummary, SplitName } from "./types";
+import { getRoutes, getRun, listRuns, videoUrl } from "./api";
+import type { Analysis, Route, RunSummary, SplitName, Tip } from "./types";
 import Timeline from "./Timeline";
 import RunPicker from "./RunPicker";
 import Tips from "./Tips";
+import CoachPanel from "./CoachPanel";
+import Digest from "./Digest";
+import ComparePanel from "./ComparePanel";
 
 const hashParam = (key: string) => new URLSearchParams(window.location.hash.slice(1)).get(key);
 
@@ -17,7 +20,11 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [selectedSplit, setSelectedSplit] = useState<SplitName | null>(null);
   const [stopAtEnd, setStopAtEnd] = useState(false);
+  const [selectedTip, setSelectedTip] = useState<number | null>(null); // index into analysis.tips
+  const [digestVersion, setDigestVersion] = useState(0);
   const [videoFailed, setVideoFailed] = useState(false); // video.mp4 missing / broken link
+  const [routes, setRoutes] = useState<Map<string, Route>>(new Map());
+  const [compareTip, setCompareTip] = useState<number | null>(null); // tip shown in the compare panel
   // A split named in the page URL (#run=..&split=..) is selected once its run loads.
   const pendingSplit = useRef<string | null>(hashParam("split"));
 
@@ -28,12 +35,20 @@ export default function App() {
         setRunId((id) => (id && list.some((r) => r.id === id) ? id : list[0]?.id ?? null));
       })
       .catch((e) => setError(String(e)));
+    getRoutes()
+      .then(({ routes: list, errors }) => {
+        setRoutes(new Map(list.map((r) => [r.id, r])));
+        if (errors.length) console.warn("knowledge/routes.md:", errors);
+      })
+      .catch(() => {}); // the library is optional
   }, []);
 
   useEffect(() => {
     if (!runId) return;
     setAnalysis(null);
     setSelectedSplit(null);
+    setSelectedTip(null);
+    setCompareTip(null);
     setVideoDuration(null);
     setVideoFailed(false);
     setCurrentTime(0);
@@ -61,6 +76,23 @@ export default function App() {
     },
     [video],
   );
+
+  const tips = analysis?.tips ?? [];
+  const selectTip = useCallback(
+    (i: number) => {
+      const tip = tips[i];
+      if (!tip) return;
+      setSelectedTip(i);
+      seek(tip.t_s);
+    },
+    [tips, seek],
+  );
+  const setTips = useCallback((next: Tip[]) => {
+    setAnalysis((a) => (a ? { ...a, tips: next } : a));
+    setSelectedTip(null);
+    setCompareTip(null);
+  }, []);
+  const bumpDigest = useCallback(() => setDigestVersion((v) => v + 1), []);
 
   const splits = analysis?.splits ?? [];
   const selected = splits.find((s) => s.name === selectedSplit) ?? null;
@@ -107,6 +139,15 @@ export default function App() {
   }, [video, selected, stopAtEnd]);
 
   const run = runs?.find((r) => r.id === runId);
+  const openCompare = useCallback(
+    (i: number) => {
+      video?.pause(); // the panel has its own copy of the run video
+      setCompareTip(i);
+    },
+    [video],
+  );
+  const compare = compareTip != null ? tips[compareTip] : undefined;
+  const compareRoute = compare?.coach?.reference_route ? routes.get(compare.coach.reference_route) : undefined;
   // The timeline maps the video's real length to its full width; until the
   // video's metadata loads, fall back to the analyzed duration.
   const duration = videoDuration ?? analysis?.run.duration_s ?? 1;
@@ -167,6 +208,9 @@ export default function App() {
                 runEnd={analysis.run.run_end_s}
                 splits={splits}
                 detailed={analysis.detailed_segments ?? []}
+                tips={tips}
+                selectedTip={selectedTip}
+                onSelectTip={selectTip}
                 opponent={analysis.opponent}
                 truth={analysis.truth}
                 finalTimeText={analysis.run.final_time_text}
@@ -182,9 +226,28 @@ export default function App() {
               />
             </section>
 
+            {compare && compareRoute && (
+              <ComparePanel
+                key={`${runId}-${compareTip}`}
+                runVideoSrc={run?.has_video === false || videoFailed ? null : videoUrl(runId)}
+                tip={compare}
+                route={compareRoute}
+                onClose={() => setCompareTip(null)}
+              />
+            )}
+
             <section className="feedback" aria-label="Feedback">
               <h2 className="section-title">Feedback</h2>
-              <Tips tips={analysis.tips} currentTime={currentTime} onSeek={seek} />
+              <Tips
+                tips={tips}
+                currentTime={currentTime}
+                selected={selectedTip}
+                onSelect={selectTip}
+                routes={routes}
+                onCompare={openCompare}
+              />
+              <CoachPanel runId={runId} onTipsImported={setTips} onDigestChanged={bumpDigest} />
+              <Digest runId={runId} version={digestVersion} />
             </section>
           </>
         )}

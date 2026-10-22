@@ -8,7 +8,9 @@ interface Props {
   onChange: (id: string) => void;
 }
 
-/** One run's title: date — Won/Lost (coloured) final time. */
+const OUTCOME_CLASS = { Won: "run-won", Lost: "run-lost", Forfeit: "run-forfeit" } as const;
+
+/** One run's title: date — Won/Lost/Forfeit (coloured) final time [Private room]. */
 function Title({ run, showId = false }: { run: RunSummary; showId?: boolean }) {
   const t = runTitle(run);
   return (
@@ -16,8 +18,9 @@ function Title({ run, showId = false }: { run: RunSummary; showId?: boolean }) {
       <span className="run-date">{t.date}</span>
       {t.estimated && <span className="run-est"> est.</span>}
       <span className="run-sep"> — </span>
-      {t.outcome && <span className={t.outcome === "Won" ? "run-won" : "run-lost"}>{t.outcome} </span>}
+      {t.outcome && <span className={OUTCOME_CLASS[t.outcome]}>{t.outcome} </span>}
       <span className="run-time">{t.time}</span>
+      {t.privateRoom && <span className="run-tag"> Private room</span>}
       {showId && t.date !== run.id && <span className="run-id"> · {run.id}</span>}
     </span>
   );
@@ -25,7 +28,7 @@ function Title({ run, showId = false }: { run: RunSummary; showId?: boolean }) {
 
 /**
  * Minecraft-style run dropdown. A native <select> can't colour single words
- * ("Won" gold, "Lost" red), so this is a button + listbox (ARIA combobox-less
+ * ("Won" gold, "Lost" red, "Forfeit" grey), so this is a button + listbox (ARIA combobox-less
  * "listbox button" pattern): Enter/Space/Arrow keys open it, arrows move,
  * Enter picks, Esc closes, Home/End jump.
  */

@@ -18,17 +18,26 @@ Reading (`F3Reader`):
   at the GUI scale k measured for the video (layout.json) with 1 font px = 1 GUI px. Mods
   add lines, so line numbers are not fixed: each line is identified by its **prefix**
   ("XYZ:", "Block:", "Chunk:", "Facing:", "Biome:", "minecraft:...FC") - found once by
-  reading the whole column, then re-checked on every frame at the cached line numbers.
+  reading the whole column, then re-read on every frame at the cached line numbers. XYZ,
+  Block and Chunk are always consecutive, so a number line whose prefix is blurred beyond
+  reading is located by that order (and accepted only if its body parses strictly).
 * **Text mask.** Vanilla 1.16 draws each line on a translucent dark box (#505050, 56%
-  opaque) and the text in #E0E0E0 without a shadow, so even over lava or a bright sky the
+  opaque) and the text in #E0E0E0 without a shadow, so even over sand or a bright sky the
   background behind the text is at most ~160 grey. A text pixel = light, neutral and
   clearly brighter than its *local* background (a grey-level opening with a 2.5 font px
   square removes the 1-font-px strokes and leaves the background).
-* **Glyphs.** The glyph reader (glyphs.py) with the harvested digit + letter templates
-  (8-row grid) - at the four videos' k = 3.0-4.5 screen px per font px every glyph
-  segments cleanly; the synthesis reader is not needed (it would be below ~2.5 px).
+* **Font grid.** Glyphs advance by whole font px from GUI x 2, so every glyph cell lies on a
+  fixed k x k grid. The mask is area-averaged onto that grid (`cells`) and glyphs are cut at
+  empty grid columns: the recording's blur often closes the 1-font-px gap between glyphs in
+  screen px ("Z:" read as one glyph was the main cause of missing XYZ lines), but rarely in
+  the grid. A glyph that still does not match is re-cut at other cell thresholds / with one
+  column dropped as a blurred-over gap, accepted only on a strict, unambiguous match.
+* **Glyphs.** The glyph reader (glyphs.py) templates: harvested digit + letter grids (8 rows).
 * **Parsing.** Strict regexes on the numbers (decimals count included, so a dropped or
   extra glyph fails); fuzzy only on words (facing direction, biome id).
+* **Block fallback.** When XYZ is unreadable but Block is, the row's position is the block
+  centre (`src` = "block" in f3.csv / analysis.json points), valid only if the Chunk line
+  confirms the Block line (`block_unverified` otherwise).
 
 Validation without hand labels (`check_reads`): the F3 lines are redundant, and the
 player obeys physics, so every read can be checked against itself and its neighbours:
@@ -48,6 +57,7 @@ Reads that fail a position check are flagged and left out of analysis.json's
 `state.points`; f3.csv keeps everything.
 """
 
+import bisect
 import csv
 import difflib
 import math
@@ -60,10 +70,10 @@ import numpy as np
 
 from . import config
 from .dimension import _f3_word
-from .glyphs import load_glyph_templates, segment_line
+from .glyphs import load_glyph_templates
 
 F3_FIELDS = ["time_s", "x", "y", "z", "bx", "by", "bz", "yaw", "pitch", "dim", "biome", "confidence", "flags",
-             "facing", "towards", "chunk", "raw"]
+             "facing", "towards", "chunk", "raw", "src"]
 VANILLA_OFFSETS = {"dim": -2, "block": 1, "chunk": 2, "facing": 3, "biome": 8}   # line numbers relative to XYZ
 NUMERIC_KINDS = ("xyz", "block", "chunk")
 NARROW_UNKNOWN = "\u00b7"                # an unreadable glyph 1-2 font px wide (a "." / ":" with a lost cell)
@@ -73,7 +83,7 @@ DIRECTIONS = ("south", "west", "north", "east")          # Direction.fromRotatio
 TOWARDS = {"south": ("positive", "Z"), "north": ("negative", "Z"), "east": ("positive", "X"),
            "west": ("negative", "X")}
 # Position checks: a read failing any of these is not a valid position.
-POSITION_FLAGS = ("no_xyz", "no_block", "block_mismatch", "chunk_mismatch", "y_range", "speed")
+POSITION_FLAGS = ("no_xyz", "no_block", "block_mismatch", "chunk_mismatch", "y_range", "speed", "block_unverified")
 BIOMES_116 = """ocean plains desert mountains forest taiga swamp river nether_wastes the_end frozen_ocean
 frozen_river snowy_tundra snowy_mountains mushroom_fields mushroom_field_shore beach desert_hills wooded_hills
 taiga_hills mountain_edge jungle jungle_hills jungle_edge deep_ocean stone_shore snowy_beach birch_forest
@@ -129,8 +139,21 @@ def _after_colon(text):
 
 
 def _body(text, kind):
-    """The line after its prefix (the prefix's ':' may have been read as '?')."""
-    return text[len(PREFIXES[kind]):] if text else ""
+    """The line after its prefix (the prefix's ':' may have been read as '?'). The number lines'
+    prefix is one word, so their body starts at the first space (robust to a misread prefix)."""
+    if not text:
+        return ""
+    if kind in NUMERIC_KINDS:
+        return text[text.index(" "):] if " " in text else ""
+    return text[len(PREFIXES[kind]):]
+
+
+NUMBER_RES = {"xyz": XYZ_RE, "block": BLOCK_RE, "chunk": CHUNK_RE}
+
+
+def _number_body_ok(text, kind):
+    """Does the line's body parse as the number line `kind` (strict regex)?"""
+    return bool(NUMBER_RES[kind].match(_strip_junk(_body(text, kind))))
 
 
 JUNK = "?.:" + NARROW_UNKNOWN
@@ -193,6 +216,23 @@ def parse_lines(lines):
     return out
 
 
+def soft_ratio(cells, ch, templates):
+    """min over the other templates T of the same width: (d(T) - d(ch)) / (cells where T and ch
+    differ, as a share) with d = mean |cells - template|. 1 = the differing cells are exactly ch's,
+    0 = halfway between ch and T, < 0 = closer to T."""
+    mine = templates[ch].astype(np.float32)
+    d_mine = np.abs(cells - mine)
+    worst = 1.0
+    for c, t in templates.items():
+        if c == ch or t.shape != cells.shape:
+            continue
+        diff = t != templates[ch]
+        if not diff.any():
+            continue
+        worst = min(worst, float((np.abs(cells - t)[diff] - d_mine[diff]).sum() / diff.sum()))
+    return worst
+
+
 class F3Reader:
     """Reads the F3 left column of one frame at the layout's GUI scale."""
 
@@ -203,14 +243,15 @@ class F3Reader:
         self.numeric = {c: g for c, g in self.templates.items() if c in NUMERIC_CHARS}
         self.numeric_facing = {c: g for c, g in self.templates.items() if c in "0123456789-./)"}
         self.lines = {}               # kind -> line number, from the last full scan
+        self.cell_on = config.F3_CELL_ON
         self.n_lines = min(config.F3_READ_MAX_LINES, int((self.y1 - self.y0) / (9 * self.k)))
         self.kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (int(round(2.5 * self.k)) | 1,) * 2)
         self.read_s = 0.0             # time spent reading (for the report)
         self.reads = 0
 
-    def line_mask(self, frame, i):
-        """Text mask of F3 line i -> (mask, cap-top row in the mask, box-row brightness per column)
-        or (None, None, None).
+    def line_mask(self, frame, i, soft=False):
+        """Text mask of F3 line i -> (mask, cap-top row in the mask, box-row brightness per column,
+        GUI x 2 = the text's left edge in mask px (float)) or (None, None, None, None).
 
         The box row = the line's top box row (GUI row top-1), which never holds glyph pixels: inside
         the box it is the darkened world (<= ~160 grey even over white), outside it the world itself.
@@ -221,7 +262,7 @@ class F3Reader:
         xa = int(round(self.x0 + 1 * k))
         xb = min(frame.shape[1], int(round(self.x0 + config.F3_READ_LINE_GUI_W * k)))
         if ya < 0 or yb > frame.shape[0]:
-            return None, None, None
+            return None, None, None, None
         crop = frame[ya:yb, xa:xb]
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         box_row = np.median(gray[:max(1, int(round(0.5 * k)))], axis=0)
@@ -230,37 +271,159 @@ class F3Reader:
         p = crop.astype(np.int16)
         chroma = p.max(axis=2) - p.min(axis=2)
         step = np.maximum(config.F3_READ_MIN_STEP, (224 - bg) * config.F3_READ_STEP_SHARE)
-        mask = (g - bg >= step) & (g >= config.F3_READ_MIN_LIGHT) & (chroma <= config.F3_READ_MAX_CHROMA)
-        return mask, int(round(top - ya)), box_row
+        if not soft:
+            mask = (g - bg >= step) & (g >= config.F3_READ_MIN_LIGHT) & (chroma <= config.F3_READ_MAX_CHROMA)
+            return mask, top - ya, box_row, self.x0 + 2 * k - xa
+        # Soft mask on the darkest channel: white text is bright in all three channels, while the
+        # recording's chroma subsampling tints thin strokes over lava / grass (so a chroma limit
+        # drops them) - a coloured world pixel stays dark in at least one channel.
+        lo = p.min(axis=2)
+        bg_lo = cv2.morphologyEx(lo.astype(np.uint8), cv2.MORPH_OPEN, self.kernel).astype(np.float32)
+        inside = box_row <= config.F3_BOX_MAX_GREY
+        sel = lo[:, inside] if inside.any() else lo
+        text_level = float(np.percentile(sel, 99))
+        span = np.maximum(text_level - bg_lo, config.F3_SOFT_MIN_SPAN)
+        mask = np.clip((lo - bg_lo) / span, 0.0, 1.0)
+        mask[chroma > config.F3_SOFT_MAX_CHROMA] = 0.0
+        return mask, top - ya, box_row, self.x0 + 2 * k - xa
 
-    def glyphs(self, frame, i):
-        """Glyphs of F3 line i -> [(space_before, grid)] (world pixels outside the text box dropped)."""
-        mask, top, box_row = self.line_mask(frame, i)
+    def cells(self, mask, top, left):
+        """Area-average the mask onto the font-pixel grid -> (8 x n) float array.
+
+        F3 text is drawn from GUI x 2 with integer advances (glyph width + 1) and 1 font px = 1 GUI px,
+        so every glyph cell sits on a fixed grid of k x k screen px: averaging over exactly those cells
+        keeps the 1-font-px gap between glyphs even when the recording's blur closes it in screen px."""
+        k = self.k
+        n = int((mask.shape[1] - left) // k)
+        if n <= 0:
+            return np.zeros((8, 0), np.float32)
+        sat = np.zeros((mask.shape[0] + 1, mask.shape[1] + 1), np.float64)
+        sat[1:, 1:] = mask.astype(np.float64).cumsum(0).cumsum(1)
+
+        def interp(a, pos, axis):                         # summed-area table at fractional positions
+            pos = np.clip(pos, 0, a.shape[axis] - 1)
+            i0 = np.minimum(np.floor(pos).astype(int), a.shape[axis] - 2)
+            f = pos - i0
+            if axis == 1:
+                return a[:, i0] * (1 - f) + a[:, i0 + 1] * f
+            return a[i0] * (1 - f)[:, None] + a[i0 + 1] * f[:, None]
+
+        xs = left + k * np.arange(n + 1)
+        ys = top + k * np.arange(9)
+        s = interp(interp(sat, xs, 1), ys, 0)
+        return (np.diff(np.diff(s, axis=0), axis=1) / (k * k)).astype(np.float32)
+
+    def glyphs(self, frame, i, soft=False):
+        """Glyphs of F3 line i -> [(space_before, grid, region)] (world pixels outside the text box
+        dropped). `region` = the glyph's float cells plus the empty column on either side, for
+        re-segmenting a glyph that does not match (see `resolve`)."""
+        mask, top, box_row, left = self.line_mask(frame, i, soft)
         if mask is None or mask.sum() < 10:
             return []
-        _, glyphs = segment_line(mask, self.k, top, rows=8)
+        cells = self.cells(mask, top, left)
+        on = cells >= self.cell_on
+        cols = on.any(axis=0)
+        k = self.k
         out, prev = [], None
-        for g in glyphs:
-            if prev is not None and (g["x0"] - prev) / self.k >= config.F3_READ_BREAK_FONT_PX:
+        c, n = 0, len(cols)
+        while c < n:
+            if not cols[c]:
+                c += 1
+                continue
+            a = c
+            while c < n and cols[c]:
+                c += 1
+            if prev is not None and a - prev >= config.F3_READ_BREAK_FONT_PX:
                 break                                   # right-column text, not this line
-            if float(np.median(box_row[g["x0"]:g["x1"]])) > config.F3_BOX_MAX_GREY:
+            x0, x1 = int(round(left + a * k)), int(round(left + c * k))
+            if float(np.median(box_row[x0:max(x0 + 1, x1)])) > config.F3_BOX_MAX_GREY:
                 continue                                # outside the line's dark box: bright world, not text
             # a space is 4 font px wide (+1 px glyph gap); glyphs are 1 px apart
-            out.append((prev is not None and (g["x0"] - prev) / self.k >= 2.5, g["grid"]))
-            prev = g["x1"]
+            out.append((prev is not None and a - prev >= 3, on[:, a:c], cells[:, max(0, a - 1):c + 1], cells[:, a:c]))
+            prev = c
         return out
+
+    def strict(self, grid, soft, templates):
+        """(char, score) if `grid` matches one template clearly (high score, clear margin), else None."""
+        best, second = (0.0, None), 0.0
+        for ch, t in templates.items():
+            if t.shape != grid.shape:
+                continue
+            sc = float((t == grid).mean())
+            if sc > best[0]:
+                best, second = (sc, ch), best[0]
+            elif sc > second:
+                second = sc
+        if best[1] is not None and best[0] >= config.F3_RETRY_MIN_SCORE and \
+                best[0] - second >= config.F3_RETRY_MIN_MARGIN and self.soft_clear(soft, best[1], templates):
+            return best[1], best[0]
+        return None
+
+    @staticmethod
+    def soft_clear(cells, ch, templates):
+        """Is `ch` clearly the closest template to the glyph's *unthresholded* cells? A blurred or
+        low-contrast stroke sits near the cell threshold: binarised it can turn one digit into
+        another (8 -> 3, 6 -> 5), but in the soft cells the two stay close and the glyph is rejected."""
+        return soft_ratio(cells, ch, templates) >= config.F3_SOFT_MIN_RATIO
+
+    def resolve(self, region, templates):
+        """An unmatched glyph -> [(char, score), ...] or None.
+
+        The recording's blur either closes the 1-font-px gap between two glyphs (one wide run) or
+        fades a glyph's thin outer column; re-cut the glyph's cells (with one empty column either
+        side) at a few cell thresholds and also try dropping one column as the closed gap. Every
+        piece must match a template strictly (F3_RETRY_MIN_SCORE / _MARGIN), so the retry yields a
+        character only when the glyph is unambiguous."""
+        for th in config.F3_RETRY_CELL_ON:
+            on = region >= th
+            cols = on.any(axis=0)
+            runs, c = [], 0
+            while c < len(cols):
+                if cols[c]:
+                    a = c
+                    while c < len(cols) and cols[c]:
+                        c += 1
+                    runs.append((on[:, a:c], region[:, a:c]))
+                c += 1
+            if not runs:
+                continue
+            pieces = []
+            for grid, soft in runs:
+                m = self.strict(grid, soft, templates)
+                if m:
+                    pieces.append(m)
+                    continue
+                best = None
+                for j in range(1, grid.shape[1] - 1):          # column j = the blurred-over gap
+                    l = self.strict(grid[:, :j], soft[:, :j], templates)
+                    r = self.strict(grid[:, j + 1:], soft[:, j + 1:], templates)
+                    if l and r and (best is None or min(l[1], r[1]) > min(best[0][1], best[1][1])):
+                        best = (l, r)
+                if best is None:
+                    pieces = None
+                    break
+                pieces.extend(best)
+            if pieces:
+                return pieces
+        return None
 
     def compose(self, glyphs, kind=None):
         """Glyphs -> (text, lowest glyph score). For the number lines (XYZ, Block, Chunk) the glyphs
-        after the prefix are matched against digits and separators only (an S can't be there, a 5 can)."""
-        n_prefix = len(PREFIXES[kind]) if kind in NUMERIC_KINDS else None
-        text, low, parens = "", 1.0, 0
-        for j, (space, grid) in enumerate(glyphs):
+        after the prefix word are matched against digits and separators only (an S can't be there, a 5 can)."""
+        numeric_kind = kind in NUMERIC_KINDS
+        text, low, parens, seen_space = "", 1.0, 0, False
+        for space, grid, region, soft in glyphs:
+            seen_space |= space
             # Facing: after its second "(" come only the yaw / pitch numbers.
-            numeric = (n_prefix is not None and j >= n_prefix) or (kind == "facing" and parens >= 2)
-            ch, score = self.match(grid, (self.numeric_facing if kind == "facing" else self.numeric)
-                                   if numeric else self.templates,
-                                   config.F3_NUMERIC_MIN_SCORE if numeric else config.GLYPH_MIN_SCORE)
+            numeric = (numeric_kind and seen_space) or (kind == "facing" and parens >= 2)
+            templates = (self.numeric_facing if kind == "facing" else self.numeric) if numeric else self.templates
+            ch, score = self.match(grid, templates, config.F3_NUMERIC_MIN_SCORE if numeric else config.GLYPH_MIN_SCORE)
+            if numeric and ch != "?" and not self.soft_clear(soft, ch, templates):
+                ch = "?"                                # e.g. an 8 whose faint left column reads as a 3
+            if ch == "?":
+                pieces = self.resolve(region, templates)
+                if pieces:
+                    ch, score = "".join(c for c, _ in pieces), min(sc for _, sc in pieces)
             parens += ch == "("
             if ch == "?" and grid.shape[1] <= 2:
                 ch = NARROW_UNKNOWN                     # can only be a narrow glyph (. : i ...)
@@ -269,8 +432,15 @@ class F3Reader:
         return text, low
 
     def read_line(self, frame, i, kind=None):
-        """Read F3 line i -> (text, lowest glyph score)."""
-        return self.compose(self.glyphs(frame, i), kind)
+        """Read F3 line i -> (text, lowest glyph score). A number line that does not parse with the
+        binary grey mask is read again with the soft darkest-channel mask (`line_mask`), which keeps
+        thin strokes over coloured (lava, grass) and pale (sand, end stone) backgrounds."""
+        text = self.compose(self.glyphs(frame, i), kind)
+        if kind in NUMERIC_KINDS and not _number_body_ok(text[0], kind):
+            again = self.compose(self.glyphs(frame, i, soft=True), kind)
+            if _number_body_ok(again[0], kind):
+                return again
+        return text
 
     def match(self, grid, templates, min_score):
         """Best template; a 1-2 font px wide glyph (: . i l ...) may miss one cell if no other
@@ -288,15 +458,27 @@ class F3Reader:
         return "?", best
 
     def _scan(self, frame):
-        """Read the whole column and locate every known line by its prefix."""
-        found, texts = {}, {}
+        """Read the whole column and locate every known line by its prefix; a number line whose
+        prefix is unreadable is located by F3's fixed order (XYZ, Block, Chunk on consecutive lines)."""
+        found, texts, all_glyphs = {}, {}, {}
         for i in range(self.n_lines):
             glyphs = self.glyphs(frame, i)
+            all_glyphs[i] = glyphs
             text, score = self.compose(glyphs)
             kind = _prefix_kind(text)
             if kind and kind not in found:
                 found[kind] = i
-                texts[kind] = self.compose(glyphs, kind)
+                texts[kind] = self.read_line(frame, i, kind) if kind in NUMERIC_KINDS else self.compose(glyphs, kind)
+        for kind, off in (("xyz", 0), ("block", 1), ("chunk", 2)):
+            if kind in found:
+                continue
+            for other, o_off in (("xyz", 0), ("block", 1), ("chunk", 2)):
+                if other in found and found[other] - o_off + off in all_glyphs:
+                    i = found[other] - o_off + off
+                    text = self.read_line(frame, i, kind)
+                    if _number_body_ok(text[0], kind):
+                        found[kind], texts[kind] = i, text
+                    break
         return found, texts
 
     def read(self, t, frame):
@@ -304,18 +486,27 @@ class F3Reader:
         started = time.perf_counter()
         texts = {}
         if "xyz" in self.lines:
+            # F3 line positions are stable: read the cached lines. A number line's prefix may be
+            # blurred beyond reading; its strictly parsed body still identifies it.
             for kind, i in self.lines.items():
                 text, score = self.read_line(frame, i, kind)
-                if _prefix_kind(text) == kind:
+                if _prefix_kind(text) == kind or (kind in NUMERIC_KINDS and _number_body_ok(text, kind)):
                     texts[kind] = (text, score)
         if "xyz" not in texts:
-            found, texts = self._scan(frame)
+            found, scanned = self._scan(frame)
             if "xyz" in found:
                 # Lines not recognised on this frame: vanilla order around XYZ.
                 for kind, off in VANILLA_OFFSETS.items():
                     found.setdefault(kind, found["xyz"] + off)
                 self.lines = found
+            for kind, v in scanned.items():
+                texts.setdefault(kind, v)
         parsed = parse_lines({kind: text for kind, (text, _) in texts.items()})
+        parsed["src"] = "xyz"
+        if parsed["x"] is None and parsed["bx"] is not None:
+            # XYZ unreadable: the Block line gives the position to the block (src "block": x / z are the
+            # block centre, y the block's floor; valid only when the Chunk line confirms it).
+            parsed.update(x=parsed["bx"] + 0.5, y=float(parsed["by"]), z=parsed["bz"] + 0.5, src="block")
         conf = min((texts[k][1] for k in ("xyz", "block") if k in texts), default=0.0)
         row = {"time_s": round(t, 2), **parsed, "confidence": round(conf, 3), "flags": "",
                "raw": " | ".join(texts[k][0] for k in ("xyz", "block", "chunk") if k in texts)}
@@ -361,6 +552,8 @@ def _static_flags(row):
     flags = []
     if row.get("x") is None:
         return ["no_xyz"]
+    if row.get("src") == "block" and chunk_ok(row) is not True:
+        flags.append("block_unverified")      # Block read alone: only the Chunk line can confirm it
     if row.get("bx") is None:
         flags.append("no_block")
     elif not block_ok(row):
@@ -491,7 +684,8 @@ def write_f3_csv(path, rows):
             w.writerow([f"{r['time_s']:.2f}", _fmt(r["x"], 3), _fmt(r["y"], 5), _fmt(r["z"], 3),
                         _fmt(r["bx"]), _fmt(r["by"]), _fmt(r["bz"]), _fmt(r["yaw"], 1), _fmt(r["pitch"], 1),
                         r["dim"], r["biome"], f"{r['confidence']:.3f}", r["flags"], r["facing"], r["towards"],
-                        r["chunk"], r["raw"] if r["flags"] and r["flags"] != "teleport" else ""])
+                        r["chunk"], r["raw"] if r["flags"] and r["flags"] != "teleport" else "",
+                        r.get("src") or "xyz"])
 
 
 def read_f3_csv(path):
@@ -509,7 +703,8 @@ def read_f3_csv(path):
                          "bx": num(r["bx"], int), "by": num(r["by"], int), "bz": num(r["bz"], int),
                          "yaw": num(r["yaw"]), "pitch": num(r["pitch"]), "dim": r["dim"], "biome": r["biome"],
                          "confidence": float(r["confidence"] or 0), "flags": r["flags"], "facing": r["facing"],
-                         "towards": r["towards"], "chunk": r["chunk"], "raw": r.get("raw", "")})
+                         "towards": r["towards"], "chunk": r["chunk"], "raw": r.get("raw", ""),
+                         "src": r.get("src") or "xyz"})
     return rows
 
 
@@ -528,7 +723,7 @@ def check_stats(rows):
         flags = set(filter(None, r["flags"].split(";")))
         if r["x"] is None:
             continue
-        if r["bx"] is not None:
+        if r["bx"] is not None and r.get("src") != "block":       # (trivially true for a Block-only read)
             out["block"]["checked"] += 1
             out["block"]["passed"] += "block_mismatch" not in flags
         if chunk_ok(r) is not None:
@@ -539,7 +734,7 @@ def check_stats(rows):
             out["facing"]["passed"] += "facing_mismatch" not in flags
         out["y"]["checked"] += 1
         out["y"]["passed"] += "y_range" not in flags
-        if not flags & {"no_block", "block_mismatch", "chunk_mismatch", "y_range"}:
+        if not flags & {"no_block", "block_mismatch", "chunk_mismatch", "y_range", "block_unverified"}:
             out["speed"]["checked"] += 1
             out["speed"]["passed"] += "speed" not in flags
     return out
@@ -592,6 +787,48 @@ def split_checks(valid, splits):
     return out
 
 
+def prefer_f3_dimension(samples, rows):
+    """Copies of `samples` whose dimension label comes from a valid F3 read near the same time.
+
+    The F3 dimension line is the game telling us; the colour detector (dimension.py) is only the
+    fallback. A world/F3 sample takes the dimension of the valid F3 read(s) within F3_DIM_NEAR_S -
+    if all of them agree and no loading screen / portal overlay lies between them and the sample (a
+    dimension change could sit in between). The originals are left alone (dimension_agreement compares
+    the raw labels with F3).
+    """
+    from dataclasses import replace
+    if not rows:
+        return samples
+    check_reads(rows)
+    reads = sorted((r["time_s"], r["dim"]) for r in rows if r.get("dim") and is_valid(r))
+    if not reads:
+        return samples
+    times = [t for t, _ in reads]
+    # Times of samples that may hide a dimension change (loading screen, portal overlay).
+    unsafe = [s.time for s in samples if getattr(s, "loading", False) or getattr(s, "portal", 0.0) >= 0.3]
+    unsafe_set = set(unsafe)
+    out = []
+    near = config.F3_DIM_NEAR_S
+    for s in samples:
+        if s.screen not in ("world", "f3") or s.time in unsafe_set:
+            out.append(s)
+            continue
+        lo, hi = bisect.bisect_left(times, s.time - near), bisect.bisect_right(times, s.time + near)
+        dims = set()
+        for t, d in reads[lo:hi]:
+            a, b = sorted((t, s.time))
+            i = bisect.bisect_left(unsafe, a)
+            if i < len(unsafe) and unsafe[i] <= b:
+                continue                              # a transition may lie between read and sample
+            dims.add(d)
+        if len(dims) == 1:
+            dim = dims.pop()
+            out.append(s if (s.dimension, s.dim_src) == (dim, "f3") else replace(s, dimension=dim, dim_src="f3"))
+        else:
+            out.append(s)
+    return out
+
+
 def dimension_agreement(rows, samples):
     """F3-read dimension vs the per-sample dimension label in samples.csv (dimension.py)."""
     by_t = {round(s.time, 2): s for s in samples}
@@ -622,8 +859,10 @@ def build_state(rows, run=None, samples=None, splits=None):
                        "z": round(r["z"], 2),
                        "yaw": r["yaw"] if good_facing else None, "pitch": r["pitch"] if good_facing else None,
                        "dim": r["dim"] or None, "biome": r["biome"] or None,
-                       **({"teleport": True} if "teleport" in r["flags"] else {})})
-    state = {"source": "f3", "reads": len(rows), "valid": len(valid), "points": points,
+                       **({"teleport": True} if "teleport" in r["flags"] else {}),
+                       **({"src": "block"} if r.get("src") == "block" else {})})
+    state = {"source": "f3", "reads": len(rows), "valid": len(valid),
+             "valid_from_block": sum(r.get("src") == "block" for r in valid), "points": points,
              "checks": check_stats(rows)}
     if samples is not None and run is not None:
         state["portal_pairs"] = portal_pairs(valid, samples, run["run_end_s"])
@@ -637,7 +876,8 @@ def print_state(state, read_s=None, reads=None):
     if not state:
         print("\n=== F3 state: no f3.csv ===")
         return
-    print(f"\n=== F3 state: {state['valid']}/{state['reads']} reads valid, {len(state['points'])} points ===")
+    print(f"\n=== F3 state: {state['valid']}/{state['reads']} reads valid ({state.get('valid_from_block', 0)} from the "
+          f"Block line only), {len(state['points'])} points ===")
     for name, c in state["checks"].items():
         rate = 100 * c["passed"] / c["checked"] if c["checked"] else float("nan")
         print(f"  check {name:<7} {c['passed']:5d}/{c['checked']:<5d} pass ({rate:5.1f}%)")

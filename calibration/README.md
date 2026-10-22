@@ -295,3 +295,15 @@ from which vanilla 1.16 geometry (all in GUI px):
 | `settings` | >= 4 options buttons 138-156 GUI px wide |
 | `f3` | >= 11 left-aligned white (>= 190) text lines on the 9-GUI-px F3 line grid (chat has <= 10) |
 | `resized` | hotbar-pattern correlation < 0.3 and >= 30% flat non-black tiles (or >= 50% flat black with >= 8% non-black) and a strip blob of 2-75% of the frame with edge contrast > 5 |
+
+### `items/` - hotbar item templates (local cache, not committed)
+
+* `sprites.npz` - built by `vodreview/hotbar.py` (`python -m vodreview hotbar <run> --rebuild-templates`)
+  from a vanilla 1.16 texture folder (`config.ITEM_TEXTURES_DIR`, default `~/Downloads/textures`,
+  env `MCSR_TEXTURES`): every `item/` sprite flat, and every opaque `block/` texture rendered as the
+  3D isometric inventory cube (vanilla `gui` transform rotate 30/225, scale 0.625; faces shaded
+  0.9 / 0.68 / 0.40 = least-squares fit on 9 real icons). Cut-out block textures (plants, torches,
+  rails) become flat sprites. ~700 templates.
+* `learned/white_bed.png` - beds are drawn by a builtin entity renderer (no texture to render), so
+  this 16x16 RGBA icon is the median of 12 bed icons cut from `shipwreck-bridge` 20:45-20:55
+  (alpha = differs from the slot background). The other 15 colours are recoloured from it.

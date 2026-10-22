@@ -32,7 +32,8 @@ export function shortDate(iso: string): string | null {
 export interface RunTitle {
   date: string; // "Oct 9, 2026" or the run id if no date
   estimated: boolean; // the date was estimated from file times (shown as a muted "est.")
-  outcome: "Won" | "Lost" | null;
+  outcome: "Won" | "Lost" | "Forfeit" | null;
+  privateRoom: boolean; // shown as a "Private room" tag
   time: string; // final time, or run end mm:ss as a fallback
   tooltip: string;
 }
@@ -49,7 +50,7 @@ export function runTitle(r: RunSummary): RunTitle {
   const day = r.recording_date ? shortDate(r.recording_date) : null;
   const estimated = r.date_source === "estimated";
   const date = day ?? r.id;
-  const outcome = r.result === "win" ? "Won" : r.result === "loss" ? "Lost" : null;
+  const outcome = r.result === "win" ? "Won" : r.result === "loss" ? "Lost" : r.result === "draw" ? "Forfeit" : null;
   const time = r.final_time_text ?? (r.run_end_s != null ? mmss(r.run_end_s) : "?");
   const notes = [
     `Run folder: ${r.id}`,
@@ -59,6 +60,7 @@ export function runTitle(r: RunSummary): RunTitle {
         ? "time from the result screen (the winner's time)"
         : "time from the result screen"
       : "no final time read: run end shown",
+    ...(r.result === "draw" ? ["forfeit: a private room shows it as a draw"] : []),
   ];
-  return { date, estimated: estimated && day != null, outcome, time, tooltip: notes.join(" · ") };
+  return { date, estimated: estimated && day != null, outcome, privateRoom: r.private_room === true, time, tooltip: notes.join(" · ") };
 }

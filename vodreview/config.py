@@ -1,5 +1,6 @@
 """All tunable knobs live here, so tuning never means hunting through the code."""
 
+import os
 from pathlib import Path
 
 # --- Sampling -------------------------------------------------------------
@@ -464,6 +465,29 @@ RESULT_SUBTITLE_GUI = (1000, 0, 38.4)    # subtitle row ("Match Winner: <name> (
 RESULT_TITLE_GUI = (128, -52.9, -2.4)    # title ("Victory!" gold / loss red)
 RESULT_TITLE_CENTRE_TOL = 0.12           # language-free check: title extents centred within this share of the box
 RESULT_TITLE_MIN_PX_GUI2 = 400           # ... and >= this many (GUI px)^2 of vivid gold/red ("Victory!" ~2000)
+# Draw screen (a forfeit in a private room ends the match as a draw): aqua title
+# ("Match is over!", measured hue 90-95 / sat ~170 at forfeit 12:50; sky is hue 105-110,
+# sat <= 137) drawn in the title band (GUI y -40..-12) + a centred pure-white subtitle
+# ("Match Draw!") and no "(MM:SS.mmm)". Must hold on RESULT_DRAW_CONFIRM consecutive samples.
+RESULT_AQUA_HUE = (85, 97)
+RESULT_AQUA_MIN_SATURATION = 150
+RESULT_AQUA_MIN_VALUE = 200
+RESULT_TITLE_BAND_GUI = (-41, -11)       # rows the 4x title glyphs occupy
+RESULT_DRAW_BAND_SHARE = 0.9             # >= this share of the aqua pixels inside the title band
+RESULT_SUB_BAND_GUI = (10, 26)           # rows the 2x subtitle glyphs occupy
+RESULT_SUB_WHITE_MIN = 235               # subtitle text: every channel >= this (F3 text is 224)
+RESULT_SUB_MIN_PX_GUI2 = 150             # >= this many (GUI px)^2 of white ("Match Draw!" ~445)
+RESULT_SUB_CENTRE_TOL = 0.03             # the white text block under the centre is centred within this share of the width
+RESULT_SUB_GAP_GUI = 16                  # white columns further apart than this start a new text block
+RESULT_DRAW_CONFIRM = 3                  # consecutive samples (0.3 s at 10/s)
+# Gold/red title whose "(MM:SS.mmm)" can't be read (F3 text drawn over it): accept the
+# title structure alone (title band + white text on the subtitle row) on this many
+# consecutive samples. The final time then stays unknown.
+RESULT_NO_TIME_CONFIRM = 3
+# Fallback time reads right of the centre (finaltime.read_result_time_right):
+# (min light, opening size in GUI px; 0 = none), tried in order. Measured on the F3-on
+# private-room VODs: 200 drops desert sand; the opening drops 1x F3 text over the digits.
+RESULT_TIME_MASK_VARIANTS = ((200, 0), (170, 1.3), (200, 1.3), (230, 0), (230, 1.0))
 
 # --- Opponent panel geometry in panel font px, relative to the "Current Match" line ----
 # (tuning VOD at font px 4.5: text right edge x 1880, "Current Match" top y 144, name cap
@@ -581,7 +605,243 @@ F3_MIN_SEGMENT = 3              # a run of mutually consistent reads shorter tha
 F3_Y_RANGE = (0.0, 257.0)       # player feet height in 1.16 (build limit 256, standing on top of it)
 F3_POINTS_PER_S = 5             # analysis.json "state.points" thinning
 F3_SEGMENT_GAP_S = 2.0          # F3 samples closer than this are one stretch (one seek in `f3`)
+F3_DIM_NEAR_S = 0.5             # splits: a sample takes the dimension of valid F3 reads at most this far away
 F3_PORTAL_WINDOW_S = 20.0       # portal-pair check: reads at most this far from a transition
 F3_SPLIT_WINDOW_S = 30.0        # split check: the valid read nearest to a split start, at most this far
 F3_PORTAL_RADIUS = 32.0         # nether blocks: the arrival portal lies within this of overworld pos / 8
                                 # (portal search / placement radius; sable's new nether portal landed 19.5 off)
+
+# --- Match mode: private room vs ranked (vodreview/privateroom.py) ---------------------------
+# Templates of the MCSR panel's mode line, cut from frames without F3:
+# private_room.png  "Private Room"  shipwreck-bridge 0:30, panel font px ~4.5
+# ranked_mode.png   "Ranked Mode"   nbb 2:00, panel font px 4.0
+MODE_TEMPLATES = {"private_room": 4.5, "ranked_mode": 4.0}
+MODE_FONT_PX = (2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0)   # panel font sizes tried (1080p screen px)
+MODE_SEARCH_SCALE = 0.5          # match on a half-size frame
+MODE_FRAMES = 12                 # frames sampled over the run
+MODE_MIN_SCORE = 0.70            # a frame votes if its best template scores >= this ...
+MODE_MIN_MARGIN = 0.10           # ... and beats the other template by this much
+MODE_MIN_VOTES = 2
+F3_CELL_ON = 0.5                # a font-px cell is "on" when this share of its screen px are text pixels
+F3_RETRY_CELL_ON = (0.5, 0.65, 0.4, 0.75, 0.35)   # cell thresholds tried on a glyph that does not match
+F3_RETRY_MIN_SCORE = 0.9        # a re-cut glyph must match this well ...
+F3_RETRY_MIN_MARGIN = 0.06      # ... and this much better than any other character of its width
+F3_SOFT_MIN_SPAN = 50           # text is at least this many levels above its local background
+F3_SOFT_MAX_CHROMA = 110        # pixels more coloured than this are never text
+F3_SOFT_MIN_RATIO = 0.3        # ... the cells where it differs from any other must lean >= this far its way (soft_ratio)
+
+# --- Odometry: player movement between F3 anchors (vodreview/odometry.py) ----------------------
+ODO_SAMPLES_PER_SECOND = 15      # frames tracked per second (10-20; 10 lines up with every F3 read)
+ODO_SIZE = (640, 360)            # frames are shrunk to this before tracking (1/3 of 1080p)
+ODO_MAX_POINTS = 400             # corners tracked per frame pair
+ODO_MIN_DISTANCE = 6             # ... at least this many px apart
+ODO_LK_WIN = 21                  # Lucas-Kanade window (px) and pyramid levels (each level halves the image,
+ODO_LK_LEVELS = 4                # so 4 levels follow ~16x larger jumps - fast mouse flicks)
+ODO_FB_MAX_ERR = 0.8             # forward-backward check: track back to within this many px or drop the point
+ODO_HAND_RECT = (0.62, 0.6, 0.95, 1.0)   # held item / arm (bobs with every step): never tracked
+ODO_TEXT_MIN = 170               # F3 text (#E0E0E0) pixels: brighter than this ...
+ODO_TEXT_MAX_CHROMA = 40         # ... and this neutral; masked + dilated by ODO_TEXT_DILATE px (at ODO_SIZE)
+ODO_TEXT_DILATE = 5               # (the blur halo around glyphs; the glyphs themselves are painted over)
+ODO_FILL_BLUR = 31               # px box blur used to paint over masked pixels (smooth, no hard edges)
+ODO_EDGE_MARGIN = 3              # corners are picked at least this many px inside the usable area
+ODO_F3_BOX_ALPHA = 0.45          # opacity of the F3 line boxes as recorded (vanilla says 0.565; measured ~0.42-0.5)
+ODO_STATIC_SCENE_PX = 1.0        # if the median tracked point moved more than this (px) ...
+ODO_STATIC_PT_PX = 0.3           # ... points that moved less than this are overlay leftovers: dropped
+ODO_FOV_RANGE = (50, 120, 2)     # vertical FOV candidates (deg) for the per-run FOV fit
+ODO_DEFAULT_FOV = 70.0           # used when a run has too few F3 pairs to fit the FOV
+ODO_ROT_THR_PX = 1.5             # px: 1-point rotation RANSAC inlier threshold (flow facing)
+ODO_MOVE_PX = 1.5                # px: derotated point motion (median, 5-step median filter) above this = moving
+ODO_VERTICAL_SHARE = 0.8         # direction of travel this vertical (|y| of the unit vector) = rising / falling
+ODO_KEY_SNAP = True              # snap the travel direction to the 8 WASD directions relative to facing
+# Minecraft 1.16 movement speeds (m/s = blocks/s) used to name the motion state
+ODO_SPEEDS = {"walk": 4.317, "sprint": 5.612, "sprint_jump": 7.13, "swim": 1.97, "boat": 8.0}
+# --- Camera rotation from optical flow (vodreview/flow.py) ------------------------------------
+FLOW_FPS = 15                    # frame pairs tracked per second (10-20; a failed pair is redone at full rate)
+FLOW_WORK_W = 960                # game view is shrunk to this width before tracking (1/2 of 1080p)
+FLOW_MAX_CORNERS = 300           # corners (goodFeaturesToTrack) per frame ...
+FLOW_CORNER_QUALITY = 0.01       # ... at least this share of the strongest corner's strength ...
+FLOW_MIN_DISTANCE = 10           # ... and this many work px apart
+FLOW_LK_WIN = 21                 # Lucas-Kanade window (work px) and pyramid levels: each level halves the
+FLOW_LK_LEVELS = 4               # image, so 4 levels follow jumps ~16x bigger than the window
+FLOW_GUESS_MIN_SURVIVE = 0.5     # fewer tracks than this share survive with the guess -> also try without
+FLOW_FB_MAX_PX = 1.0             # forward-backward check: a track must come back within this (work px)
+FLOW_MIN_TRACKS = 25             # fewer surviving tracks = "lowtex" (sky, fog, darkness): rotation unknown
+FLOW_MIN_INLIERS = 15            # a rotation needs at least this many agreeing tracks ...
+FLOW_MIN_INLIER_SHARE = 0.4      # ... and this share of all tracks (else "fail" -> retried at full frame rate)
+FLOW_STATIC_DEG = 0.15           # "blur": tracks agree on < this rotation (deg) although the masked picture
+FLOW_STATIC_MAX_DIFF = 20.0      # changed by > this mean grey level: only screen-fixed corners survived a flick
+FLOW_FULL_CONF_INLIERS = 60      # confidence 1.0 needs this many inliers
+FLOW_RANSAC_PX = 2.0             # 1-point RANSAC: a track agrees with a hypothesis within this (full-res px) ...
+FLOW_RANSAC_REL = 0.08           # ... or this share of the median motion (the linear model bends on big flicks)
+FLOW_INLIER_PX = 2.0             # exact-model inlier threshold (full-res px) after Gauss-Newton
+FLOW_PURE_GOOD_SHARE = 0.7       # pure rotation explains this share of tracks -> use it; else essential matrix
+FLOW_ESSENTIAL_PX = 1.0          # essential-matrix RANSAC: max distance (full-res px) from the epipolar line
+FLOW_BRIDGE_MAX_S = 5.0          # untrackable runs (flick, blur, menu) up to this long are bridged by matching
+FLOW_ORB_FEATURES = 1500         # ... ORB features of the frames on both sides of the run
+FLOW_ORB_RATIO = 0.8             # ... a match must beat the second-best candidate by this ratio (Lowe's test)
+FLOW_GN_ITERS = 4                # Gauss-Newton iterations on the exact rotation model
+FLOW_FIT_ZOOM = True             # also fit a zoom factor (sprint FOV change) so it doesn't leak into the angles
+FLOW_HAND_RECT = (0.62, 0.55, 1.0, 1.0)   # held item / arm (fraction of the game view): bobs, never tracked
+FLOW_CROSSHAIR_GUI = 9           # crosshair: +-this many GUI px around the centre masked
+FLOW_TEXT_MIN = 170              # F3 text (#E0E0E0): brighter than this ...
+FLOW_TEXT_MAX_CHROMA = 40        # ... and this neutral. Each text row masks its line's background band:
+FLOW_TEXT_DILATE_GUI = 7.0       # rows grown this many GUI px up/down (band = text + 1 px, plus margin) ...
+FLOW_TEXT_PAD_GUI = 4.0          # ... from the screen edge to this far past the outermost letter
+FLOW_SCREEN_MAX_DT = 0.11        # a frame takes the screen type of the analysis sample at most this far away
+FLOW_DEFAULT_VFOV = 70.0         # Minecraft's FOV setting is vertical; 70 = "Normal" (used when no F3 to fit)
+FLOW_PITCH_ANCHOR_S = 0.15       # the rotation model uses F3 pitch when a read is this close, else flow's own
+FLOW_FOV_PAIR_S = 0.25           # FOV fit: F3 read pairs at most this far apart ...
+FLOW_FOV_MIN_DEG = 2.0           # ... whose F3 yaw changed by 2..30 degrees (enough signal, no wrap ambiguity)
+FLOW_FOV_MAX_DEG = 30.0
+FLOW_FOV_MIN_PAIRS = 30          # fewer pairs -> keep FLOW_DEFAULT_VFOV
+FLOW_FUSE_MAX_GAP_S = 120.0      # anchors further apart than this aren't bridged (flow just continues)
+FLOW_FUSE_DEG_PER_S = 1.0        # drift spread over a gap ~ degrees turned + this many "degrees" per second
+FLOW_EVAL_WINDOW_S = 10.0        # evaluation: unanchored drift over windows this long ...
+FLOW_EVAL_WINDOW_STRIDE_S = 2.0  # ... starting at most every this many seconds
+
+# --- Hotbar reader (vodreview/hotbar.py) ---------------------------------------
+# Item sprites come from a vanilla 1.16 texture folder (item/, block/); the
+# reader renders them once into calibration/items/sprites.npz (a local cache,
+# not committed). MCSR_TEXTURES overrides the folder.
+ITEM_TEXTURES_DIR = Path(os.environ.get("MCSR_TEXTURES", Path.home() / "Downloads" / "textures"))
+HOTBAR_FPS = 2.0                 # hotbar reads per second (only on world/F3 samples, see HOTBAR_SCREENS)
+# Decoding the whole video dominates the cost (1080p60 H.264: ~25 CPU-s per video minute in software).
+# "videotoolbox" (macOS) / "auto" decodes on the GPU: ~3 CPU-s per minute, but wall time depends on the GPU.
+HOTBAR_HWACCEL = None
+HOTBAR_SCREENS = ("world", "f3")  # the F3 overlay leaves the hotbar visible (shipwreck-bridge: F3 open 70% of the run)
+HOTBAR_SCREEN_MAX_DT = 0.25      # read only when every samples.csv row within +- this is one of those
+# Classification error = mean |rendered - observed| per channel (0-255) over the
+# 16x16 icon (stack count / durability bar pixels left out). Real matches sit at
+# ~5-17; items we have no template for (pressure plates, other packs' sprites) 18-50.
+HOTBAR_MAX_ERR = 22.0            # best candidate above this -> unknown ("")
+HOTBAR_MIN_MARGIN = 1.5          # ... or a *different* item within this error of the best -> unknown, unless
+HOTBAR_TWIN_MAX_ERR = 16.0       # ... both are plausible look-alikes fitting this well ...
+HOTBAR_TWIN_MIN_IOU = 0.6        # ... with the same silhouette (alpha-mask IoU) -> "a|b" twin label
+HOTBAR_EMPTY_MAX_ERR = 8.0       # empty slot: mean |pixel - slot mean| below this and below the best item's error
+HOTBAR_GAIN = (0.95, 1.05)       # brightness gain allowed per candidate; wider (0.85-1.15) makes stone/iron tools tie
+HOTBAR_BLUR_GUI = 0.4            # Gaussian sigma (GUI px) applied to templates: the video's scaling/compression blur
+HOTBAR_BG_MAX = 100              # slot background = 73% black over the world (+ video levels): never brighter
+HOTBAR_COUNT_MIN_LIGHT = 165     # stack-count digits are pure white: 230-255 on most videos, 170-215 on shipwreck-bridge
+HOTBAR_DIGIT_MIN_SCORE = 0.78    # count digit: share of equal font-pixel cells (GLYPH_MIN_SCORE is 0.88) ...
+HOTBAR_DIGIT_MIN_GAP = 0.02      # ... and strictly better (>= 1 of 35 cells) than the next digit (3 vs 8 differ by 2 cells)
+HOTBAR_COUNT_INK = 0.12          # unread count: this share of pure-white pixels in the count box masks it anyway
+HOTBAR_GLINT_MAX = 120           # enchant glint: largest additive purple offset fitted per channel
+HOTBAR_GLINT_ITEMS = {"golden_apple", "enchanted_golden_apple", "experience_bottle", "nether_star", "book"}
+HOTBAR_STABLE_READS = 2          # a slot's item must read the same this many times in a row to count as a change
+# GUI item lighting for 3D block icons (top, left, right face brightness),
+# least-squares fit on 9 icons (gold block, sandstone, dirt, nether bricks, cobblestone,
+# soul soil, tnt; vod-review / nbb / shipwreck-bridge): per-icon fits agree within ~0.05.
+HOTBAR_FACE_SHADE = (0.9, 0.68, 0.40)
+# Inventory leaf / grass tints (vanilla default colours, RGB).
+HOTBAR_TINTS = {"oak_leaves": (72, 181, 24), "jungle_leaves": (72, 181, 24), "acacia_leaves": (72, 181, 24),
+                "dark_oak_leaves": (72, 181, 24), "spruce_leaves": (97, 153, 97), "birch_leaves": (128, 167, 85),
+                "grass_block": (145, 189, 89), "vine": (72, 181, 24), "grass": (145, 189, 89), "fern": (145, 189, 89),
+                "lily_pad": (32, 128, 48)}
+
+# Item categories (vodreview/hotbar.py categorise(); digest "Hotbar" lines).
+# The learner's rule: leaving the bastion with 30+ NON-flammable blocks is adequate
+# (flammable blocks burn in the nether; nether woods - crimson/warped - don't).
+FLAMMABLE_BLOCK_SUFFIXES = ("_log", "_planks", "_leaves", "_wool", "_wood")
+FLAMMABLE_BLOCKS = {"hay_block", "bookshelf", "dried_kelp_block", "scaffolding", "target"}
+NONFLAMMABLE_BLOCKS = {
+    "netherrack", "blackstone", "polished_blackstone", "polished_blackstone_bricks", "gilded_blackstone",
+    "cracked_polished_blackstone_bricks", "chiseled_polished_blackstone", "basalt", "polished_basalt",
+    "cobblestone", "stone", "dirt", "coarse_dirt", "gravel", "sand", "red_sand", "soul_soil", "soul_sand",
+    "obsidian", "crying_obsidian", "nether_bricks", "red_nether_bricks", "end_stone", "andesite", "diorite",
+    "granite", "sandstone", "red_sandstone", "magma_block", "nether_wart_block", "warped_wart_block",
+    "crimson_nylium", "warped_nylium", "crimson_planks", "warped_planks", "crimson_stem", "warped_stem",
+    "stripped_crimson_stem", "stripped_warped_stem", "crimson_hyphae", "warped_hyphae", "bone_block",
+    "glowstone", "stone_bricks", "mossy_cobblestone", "clay", "packed_ice", "snow_block",
+    "grass_block", "podzol", "mycelium", "quartz_block", "smooth_stone", "bricks"}
+KEY_ITEMS = {"tnt", "flint_and_steel", "ender_pearl", "gold_ingot", "gold_nugget", "gold_block", "obsidian",
+             "crying_obsidian", "golden_carrot", "iron_axe", "iron_pickaxe", "iron_shovel", "iron_sword",
+             "ender_eye", "blaze_rod", "fire_charge", "lava_bucket", "water_bucket", "potion", "splash_potion",
+             "string", "glowstone_dust", "respawn_anchor", "crossbow", "bow", "shield"}
+KEY_ITEM_SUFFIXES = ("_bed",)
+# Many textures are near-twins at 16x16 under video blur (sandstone/end stone bricks,
+# gold block/yellow concrete powder, dirt/brown concrete powder, nether bricks/cracked).
+# Items a speedrunner plausibly carries get this error bonus, so ties go to them; a
+# rarer item still wins when it fits clearly better.
+HOTBAR_RARE_PENALTY = 2.5
+HOTBAR_UNSTACKABLE_SUFFIXES = ("_bed", "_boat", "_axe", "_pickaxe", "_shovel", "_sword", "_hoe", "_bucket", "potion",
+                               "_helmet", "_chestplate", "_leggings", "_boots")
+HOTBAR_UNSTACKABLE = {"flint_and_steel", "shears", "crossbow", "bow", "fishing_rod", "shield", "trident",
+                      "enchanted_book", "elytra", "totem_of_undying"}
+HOTBAR_COMMON_ITEMS = {
+    "stick", "iron_ingot", "iron_nugget", "flint", "gravel", "bucket", "crafting_table", "furnace", "bread",
+    "apple", "carrot", "potato", "baked_potato", "rotten_flesh", "beef", "cooked_beef", "porkchop",
+    "cooked_porkchop", "mutton", "cooked_mutton", "chicken", "cooked_chicken", "cod", "cooked_cod", "salmon",
+    "cooked_salmon", "golden_apple", "wheat", "hay_block", "bone", "feather", "leather", "gunpowder", "quartz",
+    "magma_cream", "blaze_powder", "shears", "arrow", "spectral_arrow", "enchanted_book", "book", "paper",
+    "sugar_cane", "white_wool", "glass", "oak_door", "soul_sand", "nether_wart", "torch", "milk_bucket",
+    "glass_bottle", "fire_charge", "snowball", "egg", "cobweb", "ladder",
+    # building blocks runners actually carry
+    "netherrack", "blackstone", "basalt", "cobblestone", "dirt", "soul_soil", "soul_sand", "nether_bricks",
+    "sand", "sandstone", "end_stone", "gold_block", "magma_block", "glowstone", "white_bed"}
+HOTBAR_COMMON_TOOLS = tuple(f"{m}_{t}" for m in ("wooden", "stone", "iron", "golden", "diamond")
+                            for t in ("axe", "pickaxe", "shovel", "sword", "hoe"))
+HOTBAR_COMMON_SUFFIXES = ("_boat", "_bed", "_log", "_planks", "_leaves", "_stem")
+HOTBAR_REUSE_DIFF = 2.0          # slot crop changed by less than this mean grey level -> reuse the last read
+HOTBAR_MIN_BORDER_GREY = 90      # light border row (147 in the texture, ~150-230 in videos); darker = GUI dimming
+HOTBAR_MIN_PRESENT = 0.8         # top/bottom border-row correlation needed to read a frame (hotbar 0.97-1.0, none < 0.3)
+HOTBAR_SHORTLIST = 40            # templates kept after the coarse 4x4 pass for the full 16x16 match
+
+# --- get_inventory (vodreview/inventory.py) ------------------------------------------
+INVENTORY_PX_PER_GUI = 2.0       # saved panel crop: screen px per GUI px (176x166 inventory -> ~352x332 + border)
+
+# --- container screens (vodreview/containers.py) --------------------------------------
+# Slot-grid matching of inventory-screen frames -> chest / large_chest / crafting_table / ...
+# (containers.csv), then which rampart room each chest was in (F3 position vs. the chalice).
+CONT_DARK_MAX = 95          # slot top/left edge (#373737 = 55) is darker than this (grey level)
+CONT_WHITE_MIN = 185        # slot bottom/right edge (#FFFFFF) is brighter than this
+CONT_SEARCH_GUI = 2.0       # search the panel position +-this many GUI px around the centred spot
+CONT_SEARCH_STEP = 0.5      # ... in steps of this many GUI px
+CONT_MIN_BOTTOM = 0.55      # the player-inventory rows (shared by every container) must fit this well
+CONT_BOTTOM_TOL = 0.08      # candidate layouts: inventory-row fit within this of the best one
+CONT_MIN_TOP = 0.65         # the container-specific slots must fit this well, else "other"
+CONT_FRAMES_PER_EVENT = 6   # frames classified per inventory stretch (evenly spread)
+CONT_MERGE_GAP_S = 0.25     # inventory samples closer than this belong to one stretch
+CONT_RECIPE_SHIFT = 77      # recipe book open: the panel moves right by this many GUI px
+# rampart-room inference
+CONT_ROOM_MIN_DIST = 25     # a chest this far (blocks, horizontal) from the chalice is in a rampart
+CONT_SIDE_MIN_LATERAL = 8   # ... and this far left/right of the chalice->ramparts axis
+CONT_F3_MAX_DT = 3.0        # nearest F3 position within this many seconds of the chest event
+
+# --- bastion rampart reader v0 (vodreview/bastion.py) --------------------------------
+# Feasibility geometry. Quake Pro = FOV 110 (vertical) in 1.16.1; sprinting multiplies it
+# by ~1.15 (shipwreck-bridge: flow-vs-F3-yaw measured 124-128 deg).
+BASTION_VFOVS_DEG = {"fov110": 110.0, "sprint": 126.5}
+BASTION_FEAS_DISTANCES = (20, 30, 45, 60, 80, 96, 120)
+BASTION_RENDER_CHUNKS = 16       # assumed; nether fog ends at min(16*chunks,192)/2 = 96 blocks for >=12 chunks
+# F3 labels
+BASTION_F3_MIN_CONF = 0.6        # f3.csv read confidence needed to use a position
+BASTION_STOP_MIN_S = 3.0         # a "stop" = staying within BASTION_STOP_RADIUS blocks this long
+BASTION_STOP_RADIUS = 4.0
+BASTION_RAMPART_MIN_DIST = 15.0  # rampart stops are >= this far (horizontal) from the chalice
+BASTION_SIDE_MIN_LATERAL = 8.0   # |sideways offset| from the chalice line needed to call left/right
+BASTION_DIFF_TYPE_BLOCKS = 7.0   # triple = single + 10 blocks; >= 7 apart -> different types
+BASTION_SAME_TYPE_BLOCKS = 3.0   # <= 3 apart -> same type
+# Exterior visual reader
+BASTION_APPROACH_BEFORE_S = 45.0  # window: toast ("Those Were the Days") - 45 s ...
+BASTION_APPROACH_AFTER_S = 20.0   # ... to toast + 20 s (chalice arrival + route start)
+BASTION_FPS = 4.0
+BASTION_WORK_SIZE = (480, 270)   # frames are shrunk to this before segmentation
+BASTION_STRUCT_MAX_SAT = 55      # blackstone/basalt are grey: OpenCV S <= 55 (fog teal ~145, soil ~65, netherrack ~105)
+BASTION_STRUCT_V = (10, 100)     # and dark (blackstone V ~30-80 depending on light)
+BASTION_STRUCT_MIN_TEXTURE = 4.0 # brick texture: brightness std in 5x5 >= 4 (flat fog has ~0-2)
+BASTION_TOWER_MIN_H = 0.18       # tower blob >= 18% of the view tall ...
+BASTION_TOWER_MIN_W = 0.03       # ... and >= 3% wide
+BASTION_TOP_CLEAR_PX = 6         # rows above a top that must be visible, overlay-free and non-structure
+BASTION_PAIR_MIN_SEP = 0.15      # two towers' centres >= 15% of the width apart
+BASTION_RAMPART_WIDTH_BLOCKS = 14.0  # UNCALIBRATED ruler: rampart tower width in blocks
+BASTION_GOOD_CONTRAST = 25.0     # V difference tower vs. background above it that counts as "clear" (fog lowers it)
+BASTION_NO_F3_MAP_CONF = 0.7     # without F3 yaw, screen-left = left is assumed (approach from the front)
+BASTION_MIN_CONF = 0.5           # below this a frame's guess is "unknown"
+BASTION_KNOWN_FRAMES = 3         # KNOWN = 3 agreeing confident frames ...
+BASTION_KNOWN_WINDOW_S = 3.0     # ... within 3 s, with no disagreeing frame in between
+
+# --- game view rectangle (windowed / letterboxed VODs; layout._game_rect) ---
+CAL_RECT_FRAMES = 120            # half-res frames used for the static-edge-band test
+CAL_RECT_PIX_TOL = 8             # a pixel within this many grey levels of its temporal median is "at rest"
+CAL_RECT_FRAME_FRAC = 0.85       # ... in this fraction of frames = a static pixel
+CAL_RECT_LINE_FRAC = 0.9         # an edge row/column this static belongs to a bar/title bar/taskbar, not the game

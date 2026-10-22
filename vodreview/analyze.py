@@ -14,6 +14,7 @@ from .idle import Sample, find_idle_stretches, is_still
 from .layout import Layout, calibrate, cluster_strips, load_layout, save_layout
 from .motion import MotionMeter
 from .finaltime import read_final_time
+from .privateroom import detect_private_room
 from .recdate import recording_date
 from .remux import remux_to_mp4
 from .report import write_analysis_json, write_run_json
@@ -65,7 +66,7 @@ def analyze(video_path, out_dir, make_video=True):
     samples = []
     run_end, end_reason = duration, "end of video"
     killed_at = None
-    outcome = None            # "win" / "loss" from the result screen, if seen
+    outcome = None            # "win" / "loss" / "draw" from the result screen, if seen
     result_seen_at = None     # video time the result screen was first seen
     for t, frame in iter_samples(video_path, config.SAMPLES_PER_SECOND):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -80,6 +81,11 @@ def analyze(video_path, out_dir, make_video=True):
             continue
         if result:
             run_end, end_reason, outcome, result_seen_at = t, result, result, t
+            if result == "draw":
+                # MCSR shows a draw when a match is forfeited in a private room; the
+                # streak check means the screen appeared a few samples earlier.
+                run_end = result_seen_at = max(0.0, t - (config.RESULT_DRAW_CONFIRM - 1) / config.SAMPLES_PER_SECOND)
+                end_reason = "forfeit"
             break
         opponent.update(t, frame)
         small = cv2.resize(gray, config.MOTION_SIZE, interpolation=cv2.INTER_AREA)
@@ -114,17 +120,18 @@ def analyze(video_path, out_dir, make_video=True):
     write_f3_csv(out_dir / "f3.csv", f3_rows)
     print_report(duration, run_end, end_reason, samples, stretches, sample_interval)
     final = {"text": None, "ms": None}
-    if result_seen_at is not None:
+    if result_seen_at is not None and outcome != "draw":   # a draw screen shows no time
         # Second, short pass over the result screen: read "(MM:SS.mmm)" on
         # several frames and take the consensus (see finaltime.py).
         final = read_final_time(video_path, result_seen_at,
                                 result_seen_at + config.FINAL_TIME_READ_SECONDS, duration, lay)
     rec_date, date_source = recording_date(video_path, duration)
     print(f"Recording date : {rec_date} ({date_source})")
+    private = detect_private_room(video_path, 0.0, run_end)
     run = write_run_json(out_dir, video=video_path, duration_s=duration, run_end_s=run_end,
                          end_reason=end_reason, result=outcome, sample_interval_s=sample_interval,
                          final_time_ms=final["ms"], final_time_text=final["text"],
-                         recording_date=rec_date, date_source=date_source)
+                         recording_date=rec_date, date_source=date_source, private_room=private)
     analysis_path = write_analysis_json(out_dir, run, samples, stretches, signals.toasts,
                                         opponent.rows, opponent.clock_rows, f3_rows)
     print_splits(analysis_path)
@@ -243,10 +250,38 @@ def print_report(duration, run_end, end_reason, samples, stretches, sample_inter
         print(f"  {screen:<10} {seconds:7.1f}s  ({100 * seconds / run_end:4.1f}%)")
 
 
+def find_result(video_path, start_s, end_s, lay):
+    """First result screen between start_s and end_s at the analysis sample rate -> (t, result) or None."""
+    from .video import open_video
+    detector = ResultDetector(lay)
+    cap = open_video(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    step = max(1, round(fps / config.SAMPLES_PER_SECOND))
+    index = int(round(start_s * fps / step)) * step
+    cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+    try:
+        while index / fps <= end_s:
+            if index % step:
+                ok = cap.grab()
+            else:
+                ok, frame = cap.read()
+                if ok:
+                    result = detector.check(frame, cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+                    if result:
+                        return index / fps, result
+            if not ok:
+                return None
+            index += 1
+    finally:
+        cap.release()
+    return None
+
+
 def update_run(out_dir, video_path=None):
     """Add/refresh final time + recording date in an existing run (no full analysis).
 
-    Reads the result screen in the video tail after the stored run end, then
+    Reads the result screen in the video tail after the stored run end (and the
+    win/loss itself if a dragon-kill run has none) and the match mode (private room?), then
     rewrites run.json and analysis.json.
     """
     import json
@@ -259,11 +294,21 @@ def update_run(out_dir, video_path=None):
     duration = run["duration_s"]
     start = run["run_end_s"]
     lay = run_layout(out_dir, video_path)
+    if run.get("result") is None and run.get("end_reason") == "dragon kill":
+        # result screen missed (e.g. by an older detector): look for it again after the kill
+        seen = find_result(video_path, start, start + config.RESULT_LOOKAHEAD_SECONDS, lay)
+        if seen:
+            t, result = seen
+            run["result"] = result
+            run["end_reason"] = f"dragon kill, result screen at {mmss(t)}: {result}"
+            start = t
+            print(f"Result screen at {mmss(t)}: {result}")
     final = read_final_time(video_path, start,
                             start + config.RESULT_LOOKAHEAD_SECONDS + config.FINAL_TIME_READ_SECONDS, duration, lay)
     run["final_time_ms"], run["final_time_text"] = final["ms"], final["text"]
     run["recording_date"], run["date_source"] = recording_date(video_path, duration)
     print(f"Recording date: {run['recording_date']} ({run['date_source']})")
+    run["private_room"] = detect_private_room(video_path, 0.0, run["run_end_s"])
     save_run_json(out_dir, run)
     rebuild_json(out_dir)
 

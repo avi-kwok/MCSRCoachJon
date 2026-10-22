@@ -295,12 +295,17 @@ h2 {
 .run-lost {
   color: var(--red);
 }
+/* forfeit (a private room shows it as a draw): neutral Minecraft grey, on black 8.6:1 */
+.run-forfeit {
+  color: var(--text-muted);
+}
 .run-sep {
   color: #a0a0a0;
 }
 /* "est." after an estimated recording date (hover the title for where it came from) */
 .run-est,
-.run-id {
+.run-id,
+.run-tag {
   color: #8a8a8a;
 }
 
@@ -905,6 +910,286 @@ h2 {
 .tip-loss {
   font-size: 0.82em;
   color: #aa0000;
+}
+/* coach (LLM) tips: category / fix type / catalogue badges */
+.tip-coach {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.coach-tag {
+  background: #5a5a8c;
+}
+.fix-easy {
+  background: #3f8f2c;
+}
+.fix-practice {
+  background: #b07a1f;
+}
+.coach-disagree {
+  background: #a3261d;
+}
+.tip-known {
+  font-style: italic;
+}
+
+/* ---- Tips track: one span per tip, coloured by fix type ---- */
+.tip-block {
+  min-width: 6px;
+}
+.track-bar.has-selection .tip-block:not(.selected) {
+  filter: saturate(0.35) brightness(0.8);
+}
+.tip-block.selected {
+  z-index: 1;
+  box-shadow:
+    inset 0 0 0 var(--px) #fff,
+    inset 0 0 0 calc(2 * var(--px)) var(--accent-navy);
+}
+.tip.selected {
+  border-color: var(--accent-navy);
+  outline: var(--px) solid var(--accent-navy);
+  outline-offset: 0;
+}
+
+/* ---------- coach panel + digest ---------- */
+
+.coach-box {
+  margin-top: 18px;
+  padding: 14px 16px 16px;
+  color: var(--gui-text);
+}
+.coach-heading,
+.coach-summary {
+  font-family: var(--font-pixel);
+  font-size: 12px;
+  font-weight: normal;
+  margin: 0 0 12px;
+  color: #262626;
+}
+.coach-summary {
+  cursor: pointer;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.coach-summary:focus-visible {
+  outline: var(--px) dashed var(--accent-navy);
+  outline-offset: 4px;
+}
+.digest[open] .coach-summary {
+  margin-bottom: 12px;
+}
+.digest-count {
+  font-family: var(--font-body);
+  font-size: 18px;
+  color: #8a5a00;
+}
+.coach-step + .coach-step {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: var(--px) solid #8b8b8b;
+}
+.coach-step-title {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  margin-bottom: 8px;
+  color: var(--accent-navy);
+  line-height: 1.5;
+}
+.coach-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  gap: 8px 14px;
+  margin-bottom: 8px;
+}
+.coach-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.coach-label {
+  font-size: 0.86em;
+  color: #3f3f3f;
+}
+.coach-input {
+  font: inherit;
+  font-size: 0.9em;
+  width: 100%;
+  padding: 4px 6px;
+  color: #fff;
+  background: #000;
+  border: var(--px) solid #a0a0a0;
+  text-shadow: none;
+}
+.coach-input:focus {
+  outline: none;
+  border-color: var(--accent-navy);
+  box-shadow: 0 0 0 var(--px) #fff;
+}
+.coach-input::placeholder {
+  color: #707070;
+}
+textarea.coach-input {
+  resize: vertical;
+  line-height: 1.1;
+}
+.coach-reply {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+.coach-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 8px;
+}
+.coach-ok {
+  color: #1d6b12;
+}
+.coach-error {
+  color: #a3261d;
+  white-space: pre-wrap;
+}
+.coach-ok ul,
+.coach-error ul {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.muted-dark {
+  color: #555;
+}
+
+/* tiny markdown (digest.md) */
+.md {
+  font-size: 0.9em;
+  line-height: 1.15;
+  max-height: 70vh;
+  overflow: auto;
+}
+.md-h {
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  line-height: 1.5;
+  margin: 14px 0 6px;
+  color: var(--accent-navy);
+}
+.md-h1 {
+  font-size: 11px;
+  margin-top: 0;
+}
+.md-p {
+  margin: 4px 0;
+}
+.md-list {
+  margin: 4px 0;
+  padding-left: 1.2em;
+}
+.md-table-wrap {
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.md-table {
+  border-collapse: collapse;
+}
+.md-table th,
+.md-table td {
+  border: 1px solid #8b8b8b;
+  padding: 1px 6px;
+  text-align: left;
+  white-space: nowrap;
+}
+.md-table th {
+  background: #b0b0b0;
+}
+.md code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+}
+.md-unknown {
+  background: #f0d97a;
+  box-shadow: inset 3px 0 0 #b07a1f;
+}
+
+/* ---------- compare with reference route ---------- */
+.tips li {
+  flex-direction: column;
+  gap: 6px;
+}
+.tip-compare {
+  align-self: flex-start;
+}
+.compare {
+  padding: 14px;
+  margin-bottom: 24px;
+}
+.compare-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.compare-title {
+  font-size: 12px;
+}
+.compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.compare-pane {
+  margin: 0;
+  min-width: 0;
+}
+.compare-pane figcaption {
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+}
+.compare-video {
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.compare-video video,
+.compare-video iframe,
+.yt-host {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border: 0;
+  background: #000;
+}
+.compare-msg {
+  margin: 0;
+  padding: 12px;
+  color: #fff;
+  text-align: center;
+}
+.compare-msg a {
+  color: var(--gold);
+}
+.compare-notes {
+  margin: 6px 0 0;
+  font-size: 0.9em;
+}
+.compare-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+.compare-hint {
+  color: #555;
+}
+@media (max-width: 800px) {
+  .compare-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ---------- narrow screens ---------- */

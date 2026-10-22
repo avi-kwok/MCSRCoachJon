@@ -1,0 +1,10 @@
+run,t_s,rampart,type,best,source,notes
+shipwreck-bridge,360,right,triple,388.5,learner,visible from ~6:00; best angle 6:28-6:29
+vod-review,334,left,triple,334,learner,seen 5:34; triple chest visible by 5:40; known before route start
+vod-review,,right,unknown,,learner,right rampart unknown at route start
+tivesflow,97,left,triple,97,learner,seen 1:37-1:49; known before route start
+tivesflow,125,right,single,125,learner,known during chalice and route start (2:05)
+shipwreck-bridge,498.3,left,triple,,f3,"t_s=RTA. chalice (-10.7,70.9,176.9); ramparts lie south (+Z) so left=east(+X); stop at (11.6,73,220.0) y=chalice+2.1; Large Chest opened there; same height as right"
+shipwreck-bridge,597.1,right,triple,,f3,"t_s=RTA. right=west(-X); stop at (-40.7,72,217.8) y=chalice+2.1; Large Chest opened there; agrees with learner row"
+shipwreck-bridge,535.8,left,triple,,chest,"t_s=RTA; containers.py chest GUI events in the room: large_chest RTA 535.8 (video 537.6) F3 (11,219) lateral -25; chest RTA 558.9 (video 560.7) F3 (7,220) lateral -21"
+shipwreck-bridge,615.5,right,triple,,chest,"t_s=RTA; containers.py chest GUI events in the room: large_chest RTA 615.5 (video 617.3) F3 (-41,217) lateral +27"

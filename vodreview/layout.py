@@ -165,7 +165,7 @@ class Layout:
                  f"  GUI scale     : {self.k:.2f} screen px per GUI px (hotbar fit {g.get('hotbar_score', 0):.2f}, "
                  f"source {g.get('source')})"]
         om = d.get("overlay_mask") or {}
-        lines.append(f"  Overlay mask  : {len(om.get('rects', []))} rects, {om.get('coverage_pct', 0):.1f}% of the frame "
+        lines.append(f"  Overlay mask  : {len(om.get('rects', []))} rects, {om.get('coverage_pct') or 0:.1f}% of the frame "
                      f"({om.get('source', 'fallback')})")
         p = self.panel
         if p.get("found"):
@@ -461,26 +461,101 @@ def colour_masks(frame):
 # Calibration
 # ---------------------------------------------------------------------------------
 
-def _game_rect(small_stack, width, height):
-    """Rows/columns that never change (and are dark) at the frame edges = letterbox bars."""
-    std = small_stack.std(axis=0)
-    mean = small_stack.mean(axis=0)
-    sh, sw = std.shape
-    static = (std < 2.0) & (mean < 40)
-    r0 = 0
-    while r0 < sh // 4 and static[r0].mean() > 0.98:
-        r0 += 1
-    r1 = sh
-    while r1 > 3 * sh // 4 and static[r1 - 1].mean() > 0.98:
-        r1 -= 1
-    c0 = 0
-    while c0 < sw // 4 and static[:, c0].mean() > 0.98:
-        c0 += 1
-    c1 = sw
-    while c1 > 3 * sw // 4 and static[:, c1 - 1].mean() > 0.98:
-        c1 -= 1
+def _game_rect(half_stack, width, height):
+    """Game view rectangle = everything inside the static bands at the frame edges.
+
+    A band row/column is "static" when nearly all of its pixels sit at their
+    temporal median in nearly all sampled frames (robust to the odd fade or
+    flash frame). That covers letterbox bars (any colour), a window title bar,
+    an OS taskbar and window borders around a windowed game; fullscreen VODs
+    have no such band, so the rect is the full frame.
+    """
+    n = len(half_stack)
+    if n < 8:
+        return [0, 0, width, height]
+    sub = half_stack[::max(1, n // config.CAL_RECT_FRAMES)]
+    med = np.median(sub, axis=0)
+    near = (np.abs(sub.astype(np.int16) - med.astype(np.int16)) <= config.CAL_RECT_PIX_TOL).mean(axis=0)
+    static = near >= config.CAL_RECT_FRAME_FRAC
+    sh, sw = static.shape
+    thr = config.CAL_RECT_LINE_FRAC
+
+    def walk(lines, limit):
+        i = 0
+        while i < limit and lines[i].mean() >= thr:
+            i += 1
+        return i if i >= 2 else 0          # a 1-line "band" is noise
+    r0 = walk(static, sh // 4)
+    r1 = sh - walk(static[::-1], sh // 4)
+    c0 = walk(static.T, sw // 4)
+    c1 = sw - walk(static.T[::-1], sw // 4)
     sx, sy = width / sw, height / sh
     return [int(round(c0 * sx)), int(round(r0 * sy)), int(round(c1 * sx)), int(round(r1 * sy))]
+
+
+def _activity(stack, axis):
+    """Mean |pixel - temporal median| per row (axis=1) or column (axis=0) of a full-res band stack."""
+    sub = stack[::max(1, len(stack) // config.CAL_RECT_FRAMES)]
+    med = np.median(sub, axis=0)
+    return np.abs(sub.astype(np.int16) - med.astype(np.int16)).mean(axis=0).mean(axis=axis)
+
+
+def _edge(act, outside, inside):
+    """Sub-pixel position (line-centre coordinates) where `act` crosses half-way from its level at index
+    `outside` (in the bar) to its level at index `inside` (in the game), scanning from outside in."""
+    step = 1 if inside > outside else -1
+    lo = float(act[outside])
+    hi = float(np.median(act[max(0, min(inside, inside + 8 * step)):max(inside, inside + 8 * step) + 1]))
+    mid = (lo + hi) / 2
+    i = outside
+    while i != inside and act[i + step] < mid:
+        i += step
+    if i == inside:
+        return float(inside)
+    a, b = float(act[i]), float(act[i + step])
+    return i + step * (mid - a) / max(b - a, 1e-6)
+
+
+def _refine_game_rect(game, top_band, bot_band, band_y, width, height):
+    """Snap the half-res game rect's edges to full-res pixels.
+
+    Each edge sits where the temporal activity rises half-way from the static bar's level to the
+    game's (the recording blurs the window edge over ~3 px; F3 text needs it within ~1 px).
+    """
+    x0, y0, x1, y1 = game
+    r = 6
+    if y0 > 0 and y0 + 2 * r < top_band.shape[1]:
+        act = _activity(top_band[:, :y0 + 2 * r + 1], 1)
+        y0 = int(round(_edge(act, max(0, y0 - r), y0 + r)))
+    if y1 < height and y1 - 2 * r > band_y:
+        off = y1 - 2 * r - band_y
+        act = _activity(bot_band[:, off:], 1)                       # act[i] = frame row y1 - 2r + i
+        out_i = min(len(act) - 1, 3 * r)
+        y1 = int(round(_edge(act, out_i, r) + (y1 - 2 * r))) + 1
+    if (x0 > 0 or x1 < width) and y1 - band_y > 8:
+        act = _activity(bot_band[:, :y1 - band_y], 0)
+        if x0 > 0:
+            x0 = int(round(_edge(act, max(0, x0 - r), min(width - 1, x0 + r))))
+        if x1 < width:
+            x1 = int(round(_edge(act, min(width - 1, x1 + r), max(0, x1 - r)))) + 1
+    return [int(x0), int(y0), int(x1), int(y1)]
+
+
+def _hotbar_dy(median, k, game, reach=4):
+    """Vertical shift (px) that best lines the hotbar's border rows up with the game view's bottom edge."""
+    from .hotbar import _BORDER_ROWS, _BORDER_V
+    x0, _, x1, y1 = game
+    xs = [int(round((x0 + x1) / 2 + (-81 + 20 * i) * k)) for i in range(9)]
+    best, best_dy = -2.0, 0
+    for dy in range(-reach, reach + 1):
+        ys = [int(np.floor(y1 + dy - 22 * k + (r + 0.5) * k)) for r in _BORDER_ROWS]
+        if min(ys) < 0 or max(ys) >= median.shape[0]:
+            continue
+        prof = np.array([np.median(median[y, xs]) for y in ys], np.float64)
+        sc = gui._corr(prof, _BORDER_V)
+        if sc > best + 1e-6 or (abs(sc - best) <= 1e-6 and abs(dy) < abs(best_dy)):
+            best, best_dy = sc, dy
+    return best_dy
 
 
 def classify_frame(frame, gray, lay, small_gray=None):
@@ -500,31 +575,43 @@ def calibrate(video_path, verbose=True):
 
     # ---- pass 1: hotbar band median + small frames (letterbox) -----------------
     band_y = int(height * 0.70)
-    bands, smalls = [], []
+    top_y = int(height * 0.12)
+    bands, halves, tops = [], [], []
     for _, frame in src:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         bands.append(gray[band_y:])
-        smalls.append(cv2.resize(gray, config.MOTION_SIZE, interpolation=cv2.INTER_AREA))
+        tops.append(gray[:top_y])
+        halves.append(cv2.resize(gray, (width // 2, height // 2), interpolation=cv2.INTER_AREA))
     if not bands:
         if verbose:
             print("Calibration: no frames could be read - using the default layout.")
         return data
     data["frames_sampled"] = len(bands)
-    game = _game_rect(np.stack(smalls).astype(np.float32), width, height)
+    game = _game_rect(np.stack(halves), width, height)
+    del halves
+    if game != [0, 0, width, height]:
+        game = _refine_game_rect(game, np.stack(tops), np.stack(bands), band_y, width, height)
+    del tops
     data["game"] = game
     data["letterboxed"] = game != [0, 0, width, height]
     sub = bands[::max(1, len(bands) // config.CAL_MEDIAN_FRAMES)]
     median = np.zeros((height, width), np.uint8)
     median[band_y:] = np.median(np.stack(sub), axis=0).astype(np.uint8)
     k, score = gui.measure_gui_scale(median, game)
+    if k is not None and game[3] < height:
+        # windowed / letterboxed: the bottom edge can be a px off - let the hotbar fit settle it
+        game[3] += _hotbar_dy(median, k, game)
+        data["game"] = game
     del bands, sub
     if k is not None and score >= config.GUI_HOTBAR_MIN_SCORE:
         data["gui"] = {"k": k, "k_raw": k, "hotbar_score": round(score, 3), "source": "hotbar"}
         x = gui.HOTBAR_W / 2
-        data["hotbar"] = [int(round(width / 2 - x * k)), int(round(game[3] - 22 * k)),
-                          int(round(width / 2 + x * k)), game[3]]
+        gcx = (game[0] + game[2]) / 2
+        data["hotbar"] = [int(round(gcx - x * k)), int(round(game[3] - 22 * k)),
+                          int(round(gcx + x * k)), game[3]]
     else:
         data["gui"]["hotbar_score"] = round(score, 3)
+        data["gui"]["k"] = REF_K * (game[3] - game[1]) / 1080      # the default, scaled to the game view
         if verbose:
             print(f"Calibration: hotbar not found (best fit {score:.2f}) - assuming the tuning VOD's GUI scale.")
     data["strips"] = {}         # the tuning VOD's strips don't apply here; measured below
@@ -632,6 +719,14 @@ def overlay_mask(smalls, halves, lay):
         x0, y0, x1, y1 = rect
         keep_out[int(y0 * fy):int(np.ceil(y1 * fy)), int(x0 * fx):int(np.ceil(x1 * fx))] = 1
     cand[keep_out > 0] = 0
+    # outside the game view (letterbox bars, title bar, taskbar): masked as whole bands below
+    gx0, gy0, gx1, gy1 = lay.game
+    inside = np.zeros_like(cand)
+    m = 2                                     # + the blurred edge line (would join everything along it)
+    ia, ib = int(gy0 * fy) + (m if gy0 > 0 else 0), int(np.ceil(gy1 * fy)) - (m if gy1 < H else 0)
+    ja, jb = int(gx0 * fx) + (m if gx0 > 0 else 0), int(np.ceil(gx1 * fx)) - (m if gx1 < W else 0)
+    inside[ia:ib, ja:jb] = 1
+    cand[inside == 0] = 0
     ks = lay.k * fx                           # small px per GUI px
     r = max(1, int(round(config.OVERLAY_JOIN_GUI * ks)))
     joined = cv2.dilate(cand, np.ones((r, 2 * r + 1), np.uint8))
@@ -646,6 +741,8 @@ def overlay_mask(smalls, halves, lay):
     # the vanilla toast stack (toasts are short-lived, rarely frequent enough for (b))
     rects.append(list(lay.norm(lay.gui_rect(-160, 0, 0, config.OVERLAY_TOAST_SLOTS * 32, ax="right"))))
     rects = _merge_rects(rects)
+    rects += [list(b) for b in ((0, 0, 1, gy0 / H), (0, gy1 / H, 1, 1), (0, 0, gx0 / W, 1), (gx1 / W, 0, 1, 1))
+              if b[2] > b[0] and b[3] > b[1]]
     mask = np.zeros((sh, sw), bool)
     for x0, y0, x1, y1 in rects:
         mask[int(y0 * sh):int(np.ceil(y1 * sh)), int(x0 * sw):int(np.ceil(x1 * sw))] = True

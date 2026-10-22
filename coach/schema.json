@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MCSR coach tips",
+  "description": "Output of the LLM coach for one run. Validated by `python -m vodreview import-tips` (plain-Python subset: type, enum, required, properties, additionalProperties, items, minimum, minLength, minItems).",
+  "type": "object",
+  "required": ["tips"],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {"type": "string"},
+    "summary": {"type": "string", "description": "2-4 sentences: biggest time losses, easy wins first."},
+    "unknowns": {"type": "array", "items": {"type": "string"}, "description": "UNKNOWN digest fields that blocked a judgement."},
+    "tips": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "t_start_s", "t_end_s", "split", "scope", "kind", "title", "explanation",
+                     "known_at_time", "est_seconds_lost", "confidence", "fix_type", "severity_rank",
+                     "evidence", "catalogue_id", "disagrees_with_catalogue"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "description": "unique within this file, e.g. t1"},
+          "t_start_s": {"type": "number", "minimum": 0, "description": "VOD seconds"},
+          "t_end_s": {"type": "number", "minimum": 0, "description": "VOD seconds, >= t_start_s"},
+          "split": {"type": "string", "enum": ["overworld", "entered_nether", "found_bastion", "found_fortress",
+                                                "finding_stronghold", "found_stronghold", "entered_end"]},
+          "scope": {"type": "string", "enum": ["macro", "micro"]},
+          "kind": {"type": "string", "enum": ["knowledge", "mechanics"]},
+          "title": {"type": "string", "minLength": 1},
+          "explanation": {"type": "string", "minLength": 1, "description": "WHY it costs time and what to do instead"},
+          "known_at_time": {"type": "string", "minLength": 1, "description": "what the player could see/know at that moment; the tip may rely only on this"},
+          "est_seconds_lost": {"type": "number", "minimum": 0},
+          "confidence": {"type": "string", "enum": ["low", "med", "high"]},
+          "fix_type": {"type": "string", "enum": ["easy", "practice"]},
+          "severity_rank": {"type": "integer", "minimum": 1, "description": "1 = fix first (seconds lost x ease of fix)"},
+          "evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1},
+                       "description": "timestamps / digest section refs / frames, e.g. 'digest g: Bastion inv 30.0s', 'frame 4:49.5'"},
+          "catalogue_id": {"type": ["string", "null"], "description": "knowledge/mistakes.md id, or null"},
+          "reference_route": {"type": ["string", "null"], "minLength": 1,
+                              "description": "optional: knowledge/routes.md route id (same bastion type + entry) to compare against, or null; never invent one"},
+          "disagrees_with_catalogue": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["id", "reason"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "reason": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    }
+  }
+}
